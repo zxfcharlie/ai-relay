@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  ai-relay:
+    build: .
+    image: ai-relay:latest
+    container_name: ai-relay
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8511}:8511"
+    environment:
+      - PORT=8511
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data

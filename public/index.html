@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- ===================== AUTH SCREEN ===================== -->
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="auth-mark">✳️</div>
+    <div id="auth-first-badge" class="auth-badge hidden">首次运行 · 你将成为管理员</div>
+    <h1 id="auth-title">欢迎回来</h1>
+    <p class="auth-sub" id="auth-sub">登录以继续对话</p>
+
+    <div id="auth-error" class="auth-error hidden"></div>
+
+    <form id="auth-form" class="auth-form">
+      <div class="field">
+        <label for="auth-username">用户名</label>
+        <input id="auth-username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="auth-password">密码</label>
+        <input id="auth-password" type="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="auth-submit">登录</button>
+    </form>
+
+    <div class="auth-switch">
+      <span id="auth-switch-text">还没有账号？</span>
+      <button type="button" id="auth-switch-btn">立即注册</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== APP SCREEN ===================== -->
+<div id="app-screen" class="hidden">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">✳️ <span id="brand-name">Relay</span></div>
+    <button class="new-chat-btn" id="new-chat-btn">＋ 新对话</button>
+    <div class="convo-list" id="convo-list"></div>
+    <div class="sidebar-footer">
+      <button class="user-menu-btn" id="user-menu-btn">
+        <span class="avatar" id="user-avatar">?</span>
+        <span style="flex:1; min-width:0;">
+          <div class="user-menu-name" id="user-name">—</div>
+          <div class="user-menu-role" id="user-role"></div>
+        </span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <button class="btn btn-ghost" id="sidebar-toggle-btn" aria-label="对话列表">☰</button>
+      <select class="model-select" id="model-select"></select>
+      <div style="width:1px;"></div>
+    </div>
+
+    <div class="chat-body" id="chat-body">
+      <div class="welcome" id="welcome-view">
+        <h1>✳️ 今天想聊点什么？</h1>
+        <div class="composer-wrap">
+          <div class="image-preview-row hidden" id="welcome-image-preview"></div>
+          <div class="composer-box">
+            <button class="attach-btn" id="welcome-attach-btn" title="添加图片" type="button">📎</button>
+            <textarea id="welcome-input" rows="1" placeholder="给 Relay 发消息，可以贴图或上传图片…"></textarea>
+            <button class="send-btn" id="welcome-send" title="发送">➤</button>
+          </div>
+        </div>
+      </div>
+      <div class="messages hidden" id="messages"></div>
+    </div>
+
+    <div class="composer hidden" id="composer">
+      <div class="image-preview-row hidden" id="msg-image-preview"></div>
+      <div class="composer-box">
+        <button class="attach-btn" id="msg-attach-btn" title="添加图片" type="button">📎</button>
+        <textarea id="msg-input" rows="1" placeholder="给 Relay 发消息，可以贴图或上传图片…"></textarea>
+        <button class="send-btn" id="msg-send" title="发送">➤</button>
+      </div>
+      <div class="composer-note">回复由你在设置中配置的模型生成，可能出现错误。</div>
+    </div>
+  </main>
+</div>
+
+<input type="file" id="image-file-input" accept="image/*" multiple class="hidden">
+
+<!-- ===================== SETTINGS MODAL ===================== -->
+<div class="modal-backdrop hidden" id="settings-modal">
+  <div class="modal">
+    <button class="modal-close" id="settings-close">✕</button>
+    <button class="modal-close" id="logout-btn" style="margin-right:14px; font-size:13px;">退出登录</button>
+    <h2>设置</h2>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="keys">API 密钥</button>
+      <button class="tab-btn" data-tab="relay">中转访问</button>
+      <button class="tab-btn hidden" data-tab="admin" id="admin-tab-btn">管理员</button>
+    </div>
+
+    <!-- Personal keys -->
+    <div class="tab-pane" data-tab="keys">
+      <p class="field-hint" style="margin-bottom:16px;">在此填写你自己的密钥可覆盖管理员配置的公共密钥；留空则使用管理员密钥（如已配置）。</p>
+      <div class="field">
+        <label>OpenAI API Key</label>
+        <div class="key-row">
+          <input id="personal-openai-key" placeholder="sk-...">
+          <button class="btn btn-ghost" data-clear="personal-openai-key">清除</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Claude (Anthropic) API Key</label>
+        <div class="key-row">
+          <input id="personal-claude-key" placeholder="sk-ant-...">
+          <button class="btn btn-ghost" data-clear="personal-claude-key">清除</button>
+        </div>
+      </div>
+      <div class="save-row">
+        <button class="btn btn-primary" id="save-keys-btn">保存</button>
+      </div>
+    </div>
+
+    <!-- Relay / remote access -->
+    <div class="tab-pane hidden" data-tab="relay">
+      <p class="field-hint" style="margin-bottom:14px;">
+        使用下面的密钥，可以把本服务当作一个 OpenAI 兼容的中转接口，从任意远程客户端调用 OpenAI 或 Claude 模型，而不必把真实密钥暴露给第三方工具。
+      </p>
+      <div class="section-title">Base URL</div>
+      <div class="copy-row"><code id="relay-base-url"></code><button class="btn btn-ghost" data-copy="relay-base-url">复制</button></div>
+
+      <div class="section-title">你的中转密钥</div>
+      <div class="copy-row"><code id="relay-key"></code><button class="btn btn-ghost" data-copy="relay-key">复制</button></div>
+      <div class="field-hint">此密钥等同于账号凭证，请勿泄露。可在下方随时重新生成（旧密钥将立即失效）。</div>
+      <div class="save-row">
+        <button class="btn btn-ghost btn-danger" id="regen-relay-key-btn">重新生成密钥</button>
+      </div>
+
+      <div class="section-title">示例（curl）</div>
+      <div class="copy-row"><code id="relay-example"></code><button class="btn btn-ghost" data-copy="relay-example">复制</button></div>
+    </div>
+
+    <!-- Admin -->
+    <div class="tab-pane hidden" data-tab="admin">
+      <div class="section-title">站点名称</div>
+      <div class="field"><input id="admin-site-name" placeholder="Relay"></div>
+
+      <div class="section-title">全局 API 密钥（供未设置个人密钥的用户使用）</div>
+      <div class="field">
+        <label>OpenAI API Key</label>
+        <div class="key-row">
+          <input id="admin-openai-key" placeholder="留空则不更改">
+          <button class="btn btn-ghost" data-clear="admin-openai-key">清除</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Claude (Anthropic) API Key</label>
+        <div class="key-row">
+          <input id="admin-claude-key" placeholder="留空则不更改">
+          <button class="btn btn-ghost" data-clear="admin-claude-key">清除</button>
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div>开放注册</div>
+          <div class="field-hint" style="margin-top:2px;">关闭后仅管理员可创建新账号（此处暂不支持邀请，可直接告知用户名密码）。</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="admin-allow-registration">
+          <span class="switch-track"></span>
+        </label>
+      </div>
+
+      <div class="field" style="margin-top:14px;">
+        <label>图片自动清理（天）</label>
+        <input id="admin-image-retention" type="number" min="0" step="1" style="max-width:120px;">
+        <div class="field-hint">聊天中上传的图片只是临时保存用于预览/下载，超过这个天数会被自动删除（文字记录不受影响）。填 0 表示模型用完后立即删除，不再支持后续预览下载。</div>
+      </div>
+
+      <div class="save-row">
+        <button class="btn btn-primary" id="save-admin-btn">保存设置</button>
+      </div>
+
+      <div class="section-title">用户</div>
+      <table class="user-table">
+        <thead><tr><th>用户名</th><th>角色</th><th>中转密钥</th><th></th></tr></thead>
+        <tbody id="admin-users-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
