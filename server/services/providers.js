@@ -75,6 +75,13 @@ function toClaudeMessages(messages) {
 
 // ---------------- provider inference (used by the relay's default routing) ----------------
 
+// Configurable in case api.openai.com / api.anthropic.com aren't reachable
+// from this host (e.g. geo-blocked) but a compatible mirror/proxy endpoint
+// is — set OPENAI_BASE_URL / ANTHROPIC_BASE_URL to point elsewhere. For a
+// generic HTTP(S) proxy instead, see services/network.js (HTTPS_PROXY).
+const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/$/, '');
+const ANTHROPIC_BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
+
 function providerForModel(model) {
   if (!model) return null;
   const m = model.toLowerCase();
@@ -100,25 +107,43 @@ function setCachedModels(provider, apiKey, models) {
 // OpenAI's /v1/models list includes plenty of non-chat models (embeddings,
 // tts, whisper, image generation, moderation, etc.) — filter down to the
 // chat/completions-capable ones so the picker isn't full of noise.
+// gpt-image-1, gpt-image-2, etc. are image-*generation* models — they only
+// work against /v1/images/*, not /v1/chat/completions, and sending them to
+// the chat endpoint fails server-side (seen in practice as a 500, not even
+// a clean 400). Matched by 'image' generically (not just 'image-1') so the
+// next-numbered release doesn't slip through the same way this one did.
 function isOpenAIChatModel(id) {
   const lower = id.toLowerCase();
   const blocked = [
     'embedding', 'whisper', 'tts', 'dall-e', 'moderation', 'babbage', 'davinci-002',
-    'ada', 'realtime', 'audio', 'transcribe', 'image-1', 'computer-use', 'search-preview'
+    'ada', 'realtime', 'audio', 'transcribe', 'image', 'computer-use', 'search-preview',
+    'sora', 'instruct'
   ];
   if (blocked.some((b) => lower.includes(b))) return false;
-  return /^(gpt|o1|o3|o4|o5|chatgpt)/.test(lower);
+  // o1/o3/o4/o5... — match any numbered reasoning-model prefix rather than
+  // an explicit list, so a future o6/o7 isn't silently dropped.
+  return /^(gpt|o[0-9]|chatgpt)/.test(lower);
+}
+
+// OpenAI's model list can include entries already past their announced
+// retirement (shutdown_date) — still returned for a grace period, but
+// calling them fails. Drop anything whose shutdown date has passed.
+function isNotShutDown(m) {
+  if (!m.shutdown_date) return true;
+  const t = Date.parse(m.shutdown_date);
+  return Number.isNaN(t) || t > Date.now();
 }
 
 async function fetchOpenAIModels(apiKey) {
   const cached = getCachedModels('openai', apiKey);
   if (cached) return cached;
-  const res = await fetch('https://api.openai.com/v1/models', {
+  const res = await fetch(`${OPENAI_BASE_URL}/v1/models`, {
     headers: { Authorization: `Bearer ${apiKey}` }
   });
   if (!res.ok) throw new Error(`OpenAI model list failed (${res.status})`);
   const data = await res.json();
   const models = (data.data || [])
+    .filter(isNotShutDown)
     .map((m) => m.id)
     .filter(isOpenAIChatModel)
     .sort()
@@ -130,7 +155,7 @@ async function fetchOpenAIModels(apiKey) {
 async function fetchClaudeModels(apiKey) {
   const cached = getCachedModels('claude', apiKey);
   if (cached) return cached;
-  const res = await fetch('https://api.anthropic.com/v1/models', {
+  const res = await fetch(`${ANTHROPIC_BASE_URL}/v1/models`, {
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
   });
   if (!res.ok) throw new Error(`Claude model list failed (${res.status})`);
@@ -169,7 +194,7 @@ async function* sseLines(response) {
 // ---------------- streaming chat ----------------
 
 async function* streamOpenAI(apiKey, model, messages) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetch(`${OPENAI_BASE_URL}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -193,9 +218,9 @@ async function* streamOpenAI(apiKey, model, messages) {
   }
 }
 
-async function* streamClaude(apiKey, model, messages) {
+async function* streamClaude(apiKey, model, messages, maxTokens = 8192) {
   const { system, messages: converted } = toClaudeMessages(messages);
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -204,7 +229,7 @@ async function* streamClaude(apiKey, model, messages) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       system,
       messages: converted,
       stream: true
@@ -212,6 +237,14 @@ async function* streamClaude(apiKey, model, messages) {
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
+    // Some models (mainly older/lower-tier ones) cap output well below
+    // 8192 and reject the request outright rather than clamping it —
+    // retry once with a conservative value instead of failing the whole
+    // message over a fixed constant that doesn't fit every model.
+    if (res.status === 400 && maxTokens > 4096 && /max_tokens/i.test(text)) {
+      yield* streamClaude(apiKey, model, messages, 4096);
+      return;
+    }
     throw new Error(`Claude error ${res.status}: ${text.slice(0, 500)}`);
   }
   for await (const { event, data } of sseLines(res)) {

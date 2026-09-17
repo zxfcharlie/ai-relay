@@ -122,13 +122,31 @@ ai-relay/
 顶部模型下拉框现在会把具体报错显示在下拉框下方（不再是笼统的"暂无可用模型"），先看这条提示：
 
 - **提示是 401 / invalid api key 之类** —— 密钥本身不对，或者复制的时候带了多余的空格/换行，重新粘贴一遍。
-- **提示是 fetch failed / timeout / network 相关**，或者压根没有任何提示但模型一直是空的 —— 大概率是这台服务器**访问不了** `api.openai.com` / `api.anthropic.com`（比如服务器在防火墙后面，或者部署在访问不了这两个域名的网络环境里）。
-  这种情况下需要给容器配一个能访问外网的代理：在 `.env` 里设置
-  ```
-  HTTPS_PROXY=http://你的代理地址:端口
-  ```
-  然后 `docker compose up -d --build` 重启一下，服务会自动把发往 OpenAI / Claude 的请求都走这个代理（不影响其他功能）。
-- 也可以直接进容器测一下网络通不通：`docker exec -it ai-relay wget -qO- https://api.openai.com/v1/models`，如果卡住或报错，基本可以确认是网络问题而不是密钥问题。
+- **提示是 403 Forbidden**（尤其是不带 Authorization 头的裸请求也返回 403，而不是"缺密钥"该有的 401）——
+  这基本可以确定**不是密钥问题，是 OpenAI / Anthropic 在請求到达你的密钥校验之前，就已经在网络层拒绝了这台服务器的 IP**，
+  常见于云服务器（AWS/GCP 等）所在的地区被判定为 OpenAI 的"不支持的国家/地区"（`unsupported_country_region_territory`），
+  和你的账号、密钥是否有效完全无关。
+- **提示是 fetch failed / timeout**，或者压根没有任何提示但模型一直是空的 —— 大概率是这台服务器**根本连不通**这两个域名（DNS 或防火墙层面）。
+
+不管是哪种网络层的拒绝，解法都是让请求从一个 OpenAI/Anthropic 认可的出口出去，两种方式任选：
+
+1. **通用代理**：在 `.env` 里配
+   ```
+   HTTPS_PROXY=http://你的代理地址:端口
+   ```
+   `docker compose up -d --build` 重启后，发往 OpenAI/Claude 的请求都会自动走这个代理。
+2. **换一个可用的接口地址**：如果你有一个自己可控的反向代理/镜像站点，且返回的数据和官方接口格式完全一致，可以直接换掉请求的地址，不用配代理：
+   ```
+   OPENAI_BASE_URL=https://你的-openai-镜像地址
+   ANTHROPIC_BASE_URL=https://你的-anthropic-镜像地址
+   ```
+
+也可以直接进容器测一下，区分是网络层问题还是别的：
+```
+docker exec -it ai-relay wget -qO- https://api.openai.com/v1/models
+docker exec -it ai-relay wget -qO- https://api.anthropic.com/v1/models
+```
+没带密钥的裸请求，OpenAI/Anthropic 正常应该回 401（说明网络通、只是缺密钥），如果回的是 403 或者卡住/连不上，就是上面说的网络层问题，配好代理或镜像地址后同一台机器上正常应该就能跑通了。
 
 ## 安全提示
 

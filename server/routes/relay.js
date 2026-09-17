@@ -77,6 +77,12 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders && res.flushHeaders();
     try {
+      // Real OpenAI sends an initial role-only chunk before content deltas;
+      // some stricter OpenAI-compatible client libraries expect it.
+      res.write(`data: ${JSON.stringify({
+        id, object: 'chat.completion.chunk', created, model,
+        choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
+      })}\n\n`);
       for await (const delta of streamChat(provider, apiKey, model, messages)) {
         const chunk = {
           id,
