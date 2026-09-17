@@ -189,10 +189,22 @@
     const sel = $('#model-select');
     sel.innerHTML = '';
 
+    const hint = $('#model-error-hint');
+    const errs = data.errors || {};
+    const errLines = [];
+    if (errs.openai) errLines.push(`OpenAI 模型获取失败：${errs.openai}`);
+    if (errs.claude) errLines.push(`Claude 模型获取失败：${errs.claude}`);
+    if (errLines.length) {
+      hint.textContent = errLines.join(' · ') + '（请检查密钥是否正确、以及服务器能否访问对应 API，见下方说明）';
+      hint.classList.remove('hidden');
+    } else {
+      hint.classList.add('hidden');
+    }
+
     if (!state.models.length) {
       state.noModelsAvailable = true;
       const opt = document.createElement('option');
-      opt.textContent = '暂无可用模型 · 请先在设置中配置 API 密钥';
+      opt.textContent = errLines.length ? '模型获取失败，见上方提示' : '暂无可用模型 · 请先在设置中配置 API 密钥';
       opt.disabled = true;
       opt.selected = true;
       sel.appendChild(opt);

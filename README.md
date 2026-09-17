@@ -112,9 +112,23 @@ ai-relay/
 │       ├── providers.js    # OpenAI / Claude 上游调用与流式解析
 │       ├── keys.js         # 密钥优先级解析
 │       ├── images.js       # 图片临时文件的读写（不进 db.json）
-│       └── cleanup.js      # 按保留天数清理过期图片 + 清理孤儿文件
+│       ├── cleanup.js      # 按保留天数清理过期图片 + 清理孤儿文件
+│       └── network.js      # 可选的出站代理支持（HTTPS_PROXY）
 └── public/                # 前端静态页面
 ```
+
+## 排查"填了密钥但读取不到模型"
+
+顶部模型下拉框现在会把具体报错显示在下拉框下方（不再是笼统的"暂无可用模型"），先看这条提示：
+
+- **提示是 401 / invalid api key 之类** —— 密钥本身不对，或者复制的时候带了多余的空格/换行，重新粘贴一遍。
+- **提示是 fetch failed / timeout / network 相关**，或者压根没有任何提示但模型一直是空的 —— 大概率是这台服务器**访问不了** `api.openai.com` / `api.anthropic.com`（比如服务器在防火墙后面，或者部署在访问不了这两个域名的网络环境里）。
+  这种情况下需要给容器配一个能访问外网的代理：在 `.env` 里设置
+  ```
+  HTTPS_PROXY=http://你的代理地址:端口
+  ```
+  然后 `docker compose up -d --build` 重启一下，服务会自动把发往 OpenAI / Claude 的请求都走这个代理（不影响其他功能）。
+- 也可以直接进容器测一下网络通不通：`docker exec -it ai-relay wget -qO- https://api.openai.com/v1/models`，如果卡住或报错，基本可以确认是网络问题而不是密钥问题。
 
 ## 安全提示
 

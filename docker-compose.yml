@@ -11,5 +11,11 @@ services:
     environment:
       - PORT=8511
       - DATA_DIR=/app/data
+      # Only needed if this host can't reach api.openai.com / api.anthropic.com
+      # directly — set HTTPS_PROXY in your .env (or shell env) and it'll be
+      # picked up here. Leave unset and this is a no-op.
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
     volumes:
       - ./data:/app/data

@@ -2,6 +2,9 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 
+const { setupProxyIfConfigured } = require('./services/network');
+setupProxyIfConfigured(); // must run before any fetch() to OpenAI/Claude happens
+
 const authRoutes = require('./routes/auth');
 const settingsRoutes = require('./routes/settings');
 const chatRoutes = require('./routes/chat');

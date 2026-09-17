@@ -340,6 +340,17 @@ a { color: inherit; }
   color: var(--text-dim);
 }
 
+.model-error-hint {
+  margin: 0 20px 10px;
+  padding: 8px 12px;
+  background: #3a2420;
+  border: 1px solid #5a3128;
+  color: #e7998a;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .chat-body {
   flex: 1;
   overflow-y: auto;
