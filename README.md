@@ -44,14 +44,19 @@ docker run -d --name ai-relay \
 - **管理员** 标签页（仅管理员可见）：填写全局 OpenAI / Claude 密钥，供未单独配置密钥的成员账号使用；
   也可以在这里开关"开放注册"、管理成员账号、设置图片保留天数。
 
-两个服务商可以只配置一个，也可以同时配置。配置完成后，聊天窗口顶部的模型下拉框会**实时从对应服务商拉取该账号当前可用的全部模型**
-（按 OpenAI / Claude 分组），不需要在代码里手动维护型号列表，新模型上线后重新打开一次设置即可用上
-（模型列表会缓存 10 分钟以减少请求）。
+两个服务商可以只配置一个，也可以同时配置。配置完成后，点击顶部的模型选择按钮会弹出一个**可搜索、分类展示**的模型面板：
+**实时从对应服务商拉取该账号当前可用的全部模型**，按"服务商 · 类型"分组（比如"OpenAI · 对话"、"OpenAI · 图像生成"、"Claude · 对话"），
+每个模型都带一句简介和一个能力标签（旗舰 / 推理 / 轻量 / 均衡 / 图像），输入关键字可以直接筛选。
+不需要在代码里手动维护型号列表，新模型上线后重新打开一次设置即可用上（模型列表会缓存 10 分钟以减少请求）。
 
-## 图片与代码
+## 图片、图像生成与代码
 
 - composer 左侧的 📎 按钮可以上传图片，也可以直接把截图粘贴进输入框，最多同时附带 6 张（单张不超过 8MB）；
   发送后会连同文字一起交给当前选中的模型理解（前提是该模型支持视觉输入 —— 目前 OpenAI 和 Claude 主力模型基本都支持）。
+- **选择"图像生成"分类下的模型**（比如 `gpt-image-2`）时，composer 的行为会变成生图/改图：
+  - 只输入文字 → 按文生图（调用 OpenAI 的 `/v1/images/generations`）
+  - 附带一张或多张参考图 + 文字指令（比如"改为黑色"）→ 按图编辑（调用 `/v1/images/edits`），会把上传的图作为参考图交给模型重新生成
+  - 生成结果直接以图片形式显示在对话里，可点击预览/下载。目前图像生成仅支持 OpenAI（Claude 没有生图接口）。
 - **图片不会塞进 `db.json`、也不会无限占用磁盘**：上传后只写一份临时文件（用于事后在聊天记录里预览/下载），
   聊天界面里显示的是一个 `/api/images/...` 链接（需要登录、且只有本人能访问），而不是把图片编码进接口响应里。
   这些临时文件按管理员设置的"图片自动清理（天）"（默认 3 天）自动删除，改成 0 则表示**模型用完这张图后立即删除，不再支持事后预览/下载**——
@@ -68,13 +73,20 @@ docker run -d --name ai-relay \
 - **你的中转密钥**：形如 `rk-xxxxxxxx`，可随时重新生成（旧密钥立即失效）
 
 任何支持自定义 `base_url` 的 OpenAI 兼容客户端（包括 OpenAI 官方 SDK、各类第三方工具）都可以直接指向这个地址，
-用中转密钥代替真实的 OpenAI / Claude 密钥。服务会根据你请求的 `model` 名称自动路由到 OpenAI 或 Claude
-（也可以在请求体里显式传 `"provider": "openai"` 或 `"provider": "claude"` 来覆盖自动判断，适合自定义/微调模型名的场景），
-并统一以 OpenAI 的响应格式返回（包括流式响应、以及图片输入的 `image_url` 格式，会被自动转换成 Claude 需要的格式）。
+用中转密钥代替真实的 OpenAI / Claude 密钥。中转接口覆盖三个能力，都是 OpenAI 官方 SDK 能直接调用的标准路径：
+
+- `POST /v1/chat/completions` —— 对话（含视觉输入）。服务会根据你请求的 `model` 名称自动路由到 OpenAI 或 Claude
+  （也可以在请求体里显式传 `"provider": "openai"` 或 `"provider": "claude"` 来覆盖自动判断，适合自定义/微调模型名的场景），
+  并统一以 OpenAI 的响应格式返回（包括流式响应、以及图片输入的 `image_url` 格式，会被自动转换成 Claude 需要的格式）。
+- `POST /v1/images/generations` —— 文生图（对应 SDK 里的 `client.images.generate()`）。
+- `POST /v1/images/edits` —— 图片编辑，multipart 上传，`image` 或 `image[]` 字段（对应 SDK 里的 `client.images.edit()`）。
+- `GET /v1/models` —— 除了标准的 `id`/`owned_by` 字段，额外带了 `category`（`chat`/`image`）、`tier`（旗舰/推理/轻量/均衡/图像）、
+  `description` 三个字段，方便你在自己的客户端里也做分类和搜索。
 
 示例：
 
 ```bash
+# 对话
 curl http://<你的服务器>:8511/v1/chat/completions \
   -H "Authorization: Bearer rk-你的中转密钥" \
   -H "Content-Type: application/json" \
@@ -83,10 +95,23 @@ curl http://<你的服务器>:8511/v1/chat/completions \
         "messages": [{"role": "user", "content": "Hello"}],
         "stream": false
       }'
+
+# 文生图
+curl http://<你的服务器>:8511/v1/images/generations \
+  -H "Authorization: Bearer rk-你的中转密钥" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-image-2", "prompt": "一只戴墨镜的柴犬，插画风格"}'
+
+# 图片编辑
+curl http://<你的服务器>:8511/v1/images/edits \
+  -H "Authorization: Bearer rk-你的中转密钥" \
+  -F "model=gpt-image-2" \
+  -F "prompt=把包的颜色改成黑色" \
+  -F "image[]=@bag.png"
 ```
 
-可用模型以 `GET /v1/models`（同样用中转密钥鉴权）返回的实时列表为准，覆盖账号下配置了密钥的服务商当前提供的所有对话模型
-（包含面向代码、推理、视觉理解等各类型号），不局限于固定的几个。
+可用模型以 `GET /v1/models`（同样用中转密钥鉴权）返回的实时列表为准，覆盖账号下配置了密钥的服务商当前提供的所有模型
+（对话、推理、视觉理解、图像生成等各类型号），不局限于固定的几个。
 
 > 提示：把服务部署在具备公网 IP / 域名的主机上，并建议加一层 HTTPS 反向代理（如 Nginx、Caddy）
 > 后再对外开放，避免中转密钥在明文 HTTP 下传输。
@@ -107,9 +132,9 @@ ai-relay/
 │   │   ├── settings.js     # 个人设置 + 管理员设置
 │   │   ├── chat.js         # 会话与流式对话
 │   │   ├── images.js       # 带鉴权的图片预览/下载 (/api/images/:filename)
-│   │   └── relay.js        # 对外的 OpenAI 兼容中转接口 (/v1)
+│   │   └── relay.js        # 对外的 OpenAI 兼容中转接口 (/v1，含对话 + 图像生成/编辑)
 │   └── services/
-│       ├── providers.js    # OpenAI / Claude 上游调用与流式解析
+│       ├── providers.js    # OpenAI / Claude 上游调用、流式解析、模型分类与简介、图像生成
 │       ├── keys.js         # 密钥优先级解析
 │       ├── images.js       # 图片临时文件的读写（不进 db.json）
 │       ├── cleanup.js      # 按保留天数清理过期图片 + 清理孤儿文件

@@ -2,7 +2,7 @@ const express = require('express');
 const { nanoid } = require('nanoid');
 const { getDB, save } = require('../db');
 const { requireAuth } = require('../auth');
-const { streamChat, fetchOpenAIModels, fetchClaudeModels } = require('../services/providers');
+const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage } = require('../services/providers');
 const { resolveApiKey } = require('../services/keys');
 const { saveImage, readImageBase64, deleteImageFile } = require('../services/images');
 const { purgeImagesForMessage } = require('../services/cleanup');
@@ -45,12 +45,12 @@ router.get('/conversations', requireAuth, (req, res) => {
   const list = db.conversations
     .filter((c) => c.userId === req.user.id)
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-    .map((c) => ({ id: c.id, title: c.title, model: c.model, provider: c.provider, updatedAt: c.updatedAt }));
+    .map((c) => ({ id: c.id, title: c.title, model: c.model, provider: c.provider, category: c.category, updatedAt: c.updatedAt }));
   res.json({ conversations: list });
 });
 
 router.post('/conversations', requireAuth, (req, res) => {
-  const { model, provider } = req.body || {};
+  const { model, provider, category } = req.body || {};
   if (!model || !provider) return res.status(400).json({ error: 'model and provider are required.' });
   const db = getDB();
   const convo = {
@@ -59,6 +59,7 @@ router.post('/conversations', requireAuth, (req, res) => {
     title: 'New chat',
     model,
     provider,
+    category: category === 'image' ? 'image' : 'chat',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -99,13 +100,14 @@ router.delete('/conversations/:id', requireAuth, (req, res) => {
 });
 
 router.put('/conversations/:id', requireAuth, (req, res) => {
-  const { title, model, provider } = req.body || {};
+  const { title, model, provider, category } = req.body || {};
   const db = getDB();
   const convo = db.conversations.find((c) => c.id === req.params.id && c.userId === req.user.id);
   if (!convo) return res.status(404).json({ error: 'Conversation not found.' });
   if (typeof title === 'string' && title.trim()) convo.title = title.trim().slice(0, 80);
   if (typeof model === 'string') convo.model = model;
   if (typeof provider === 'string') convo.provider = provider;
+  if (category === 'image' || category === 'chat') convo.category = category;
   save();
   res.json({ conversation: convo });
 });
@@ -164,15 +166,54 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
   convo.updatedAt = new Date().toISOString();
   save();
 
-  const history = db.messages
-    .filter((m) => m.conversationId === convo.id)
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-    .map((m) => ({ role: m.role, content: buildContent(m) }));
-
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders && res.flushHeaders();
+
+  // Image-generation models are a different OpenAI API family entirely
+  // (POST /v1/images/*, not chat completions) — no incremental text, just
+  // a placeholder while it works and then the finished image(s).
+  if (convo.category === 'image') {
+    res.write(`data: ${JSON.stringify({ delta: '🎨 正在生成图片…' })}\n\n`);
+    try {
+      const refImages = savedImages
+        .map((img) => ({ mediaType: img.mediaType, data: readImageBase64(img.filename) }))
+        .filter((i) => i.data);
+      const results = await generateOrEditImage(apiKey, convo.model, text || '编辑这张图片', refImages);
+      if (!results.length) throw new Error('模型没有返回图片。');
+
+      if (Number(db.settings.imageRetentionDays) === 0) purgeImagesForMessage(userMsg);
+      const outImages = results.map((img) => saveImage(img.mediaType, img.data));
+      const assistantMsg = {
+        id: nanoid(),
+        conversationId: convo.id,
+        role: 'assistant',
+        content: '',
+        images: outImages,
+        createdAt: new Date().toISOString()
+      };
+      db.messages.push(assistantMsg);
+      convo.updatedAt = new Date().toISOString();
+      save();
+
+      const imagesPayload = outImages.map((img) => ({ filename: img.filename, mediaType: img.mediaType, url: `/api/images/${img.filename}` }));
+      res.write(`data: ${JSON.stringify({ done: true, messageId: assistantMsg.id, images: imagesPayload })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    } catch (err) {
+      if (Number(db.settings.imageRetentionDays) === 0) purgeImagesForMessage(userMsg);
+      save();
+      res.write(`data: ${JSON.stringify({ error: err.message || 'Upstream error.' })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
+  }
+
+  const history = db.messages
+    .filter((m) => m.conversationId === convo.id)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    .map((m) => ({ role: m.role, content: buildContent(m) }));
 
   let full = '';
   try {

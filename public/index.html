@@ -61,7 +61,16 @@
   <main class="main">
     <div class="topbar">
       <button class="btn btn-ghost" id="sidebar-toggle-btn" aria-label="对话列表">☰</button>
-      <select class="model-select" id="model-select"></select>
+      <div class="model-picker" id="model-picker">
+        <button class="model-picker-btn" id="model-picker-btn" type="button">
+          <span id="model-picker-label">选择模型</span>
+          <span class="model-picker-caret">▾</span>
+        </button>
+        <div class="model-picker-panel hidden" id="model-picker-panel">
+          <input class="model-picker-search" id="model-picker-search" type="text" placeholder="搜索模型…">
+          <div class="model-picker-list" id="model-picker-list"></div>
+        </div>
+      </div>
       <div style="width:1px;"></div>
     </div>
     <div class="model-error-hint hidden" id="model-error-hint"></div>

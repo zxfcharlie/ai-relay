@@ -1,9 +1,11 @@
 const express = require('express');
+const multer = require('multer');
 const { getDB } = require('../db');
-const { streamChat, providerForModel, fetchOpenAIModels, fetchClaudeModels } = require('../services/providers');
+const { streamChat, providerForModel, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage } = require('../services/providers');
 const { resolveApiKey } = require('../services/keys');
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 16 } });
 
 // CORS is safe to open wide here: auth is a bearer relay key in the header,
 // never a cookie, so there is no ambient-credential risk in allowing any
@@ -38,7 +40,18 @@ router.get('/models', relayAuth, async (req, res) => {
     openaiKey ? fetchOpenAIModels(openaiKey).catch(() => []) : [],
     claudeKey ? fetchClaudeModels(claudeKey).catch(() => []) : []
   ]);
-  const data = [...openaiModels, ...claudeModels].map((m) => ({ id: m.id, object: 'model', owned_by: m.provider }));
+  // Extra fields (category/tier/description) beyond the standard OpenAI
+  // model object — well-behaved OpenAI-compatible clients ignore unknown
+  // fields, and it lets a caller build its own categorized/searchable
+  // picker the same way this app's own UI does.
+  const data = [...openaiModels, ...claudeModels].map((m) => ({
+    id: m.id,
+    object: 'model',
+    owned_by: m.provider,
+    category: m.category,
+    tier: m.tier,
+    description: m.description
+  }));
   res.json({ object: 'list', data });
 });
 
@@ -125,6 +138,58 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
         { index: 0, message: { role: 'assistant', content: full }, finish_reason: 'stop' }
       ],
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+    });
+  } catch (err) {
+    res.status(502).json({ error: { message: err.message } });
+  }
+});
+
+// POST /v1/images/generations — OpenAI-compatible text-to-image. JSON body:
+// { model, prompt, ... }. Response shape matches OpenAI's Images API
+// (data: [{ b64_json }]) so the official SDK's client.images.generate()
+// works unmodified against this base URL.
+router.post('/images/generations', relayAuth, async (req, res) => {
+  const { model, prompt } = req.body || {};
+  if (!model || !prompt) {
+    return res.status(400).json({ error: { message: 'Request must include "model" and "prompt".' } });
+  }
+  const apiKey = resolveApiKey(req.relayUser, 'openai');
+  if (!apiKey) {
+    return res.status(400).json({ error: { message: 'No OpenAI API key is configured for this account.' } });
+  }
+  try {
+    const images = await generateOrEditImage(apiKey, model, prompt, []);
+    res.json({
+      created: Math.floor(Date.now() / 1000),
+      data: images.map((img) => ({ b64_json: img.data }))
+    });
+  } catch (err) {
+    res.status(502).json({ error: { message: err.message } });
+  }
+});
+
+// POST /v1/images/edits — OpenAI-compatible image editing. multipart/form-
+// data: model, prompt, and one or more reference images under "image" or
+// "image[]" (matches client.images.edit() from the official SDK).
+router.post('/images/edits', relayAuth, upload.fields([{ name: 'image' }, { name: 'image[]' }]), async (req, res) => {
+  const { model, prompt } = req.body || {};
+  const files = [...((req.files && req.files.image) || []), ...((req.files && req.files['image[]']) || [])];
+  if (!model || !prompt) {
+    return res.status(400).json({ error: { message: 'Request must include "model" and "prompt".' } });
+  }
+  if (!files.length) {
+    return res.status(400).json({ error: { message: 'Request must include at least one "image" file.' } });
+  }
+  const apiKey = resolveApiKey(req.relayUser, 'openai');
+  if (!apiKey) {
+    return res.status(400).json({ error: { message: 'No OpenAI API key is configured for this account.' } });
+  }
+  try {
+    const refImages = files.map((f) => ({ mediaType: f.mimetype || 'image/png', data: f.buffer.toString('base64') }));
+    const images = await generateOrEditImage(apiKey, model, prompt, refImages);
+    res.json({
+      created: Math.floor(Date.now() / 1000),
+      data: images.map((img) => ({ b64_json: img.data }))
     });
   } catch (err) {
     res.status(502).json({ error: { message: err.message } });

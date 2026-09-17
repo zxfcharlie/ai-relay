@@ -104,25 +104,65 @@ function setCachedModels(provider, apiKey, models) {
   modelCache.set(`${provider}:${apiKey}`, { time: Date.now(), models });
 }
 
-// OpenAI's /v1/models list includes plenty of non-chat models (embeddings,
-// tts, whisper, image generation, moderation, etc.) — filter down to the
-// chat/completions-capable ones so the picker isn't full of noise.
-// gpt-image-1, gpt-image-2, etc. are image-*generation* models — they only
-// work against /v1/images/*, not /v1/chat/completions, and sending them to
-// the chat endpoint fails server-side (seen in practice as a 500, not even
-// a clean 400). Matched by 'image' generically (not just 'image-1') so the
-// next-numbered release doesn't slip through the same way this one did.
-function isOpenAIChatModel(id) {
+// OpenAI's /v1/models list includes plenty of non-chat, non-image models
+// (embeddings, tts, whisper, moderation, etc.) that this app can't use at
+// all — those are dropped. Everything else is classified into a category
+// so the UI can group it and route it correctly: 'chat' goes to
+// /v1/chat/completions, 'image' goes to /v1/images/*.
+const OPENAI_UNSUPPORTED = [
+  'embedding', 'whisper', 'tts', 'dall-e', 'moderation', 'babbage', 'davinci-002',
+  'ada', 'realtime', 'audio', 'transcribe', 'computer-use', 'search-preview',
+  'sora', 'instruct'
+];
+
+function classifyOpenAIModel(id) {
   const lower = id.toLowerCase();
-  const blocked = [
-    'embedding', 'whisper', 'tts', 'dall-e', 'moderation', 'babbage', 'davinci-002',
-    'ada', 'realtime', 'audio', 'transcribe', 'image', 'computer-use', 'search-preview',
-    'sora', 'instruct'
-  ];
-  if (blocked.some((b) => lower.includes(b))) return false;
+  if (OPENAI_UNSUPPORTED.some((b) => lower.includes(b))) return null;
+  if (lower.includes('image')) return 'image';
   // o1/o3/o4/o5... — match any numbered reasoning-model prefix rather than
   // an explicit list, so a future o6/o7 isn't silently dropped.
-  return /^(gpt|o[0-9]|chatgpt)/.test(lower);
+  if (/^(gpt|o[0-9]|chatgpt)/.test(lower)) return 'chat';
+  return null;
+}
+
+// Best-effort human-readable blurb + rough capability tier, matched by
+// family pattern (not exact id) so it still makes sense for model
+// snapshots this code has never seen — e.g. a dated "gpt-5.2-2026-11-03".
+function describeOpenAIModel(id, category) {
+  const lower = id.toLowerCase();
+  if (category === 'image') {
+    return {
+      tier: 'image',
+      description: '图像生成 / 编辑模型：可根据文字描述直接生成图片，也可以上传参考图后按指令编辑（改色、换背景、合成多图等）。'
+    };
+  }
+  if (/^o[0-9]/.test(lower)) {
+    return { tier: 'reasoning', description: '推理模型，擅长数学、代码与需要多步思考的复杂任务，响应通常较慢。' };
+  }
+  if (lower.includes('mini') || lower.includes('nano')) {
+    return { tier: 'fast', description: '轻量版模型，速度快、成本低，适合日常对话和简单任务。' };
+  }
+  if (/^gpt-5/.test(lower)) {
+    return { tier: 'flagship', description: 'OpenAI 旗舰对话模型，综合能力强，支持图片理解，适合复杂任务、长文写作与编程。' };
+  }
+  if (/^(gpt-4|chatgpt)/.test(lower)) {
+    return { tier: 'balanced', description: '支持图文理解的多模态对话模型。' };
+  }
+  return { tier: 'balanced', description: 'OpenAI 对话模型。' };
+}
+
+function describeClaudeModel(id) {
+  const lower = id.toLowerCase();
+  if (lower.includes('opus')) {
+    return { tier: 'flagship', description: 'Claude 旗舰模型，推理能力最强，适合复杂任务和高难度代码，支持图片理解。' };
+  }
+  if (lower.includes('haiku')) {
+    return { tier: 'fast', description: 'Claude 轻量模型，响应速度最快，适合简单、高频的任务。' };
+  }
+  if (lower.includes('sonnet')) {
+    return { tier: 'balanced', description: 'Claude 平衡型模型，兼顾能力与速度，适合日常使用，支持图片理解。' };
+  }
+  return { tier: 'balanced', description: 'Claude 对话模型。' };
 }
 
 // OpenAI's model list can include entries already past their announced
@@ -144,10 +184,14 @@ async function fetchOpenAIModels(apiKey) {
   const data = await res.json();
   const models = (data.data || [])
     .filter(isNotShutDown)
-    .map((m) => m.id)
-    .filter(isOpenAIChatModel)
-    .sort()
-    .map((id) => ({ id, label: id, provider: 'openai' }));
+    .map((m) => {
+      const category = classifyOpenAIModel(m.id);
+      if (!category) return null;
+      const meta = describeOpenAIModel(m.id, category);
+      return { id: m.id, label: m.id, provider: 'openai', category, ...meta };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.id.localeCompare(b.id));
   setCachedModels('openai', apiKey, models);
   return models;
 }
@@ -160,8 +204,13 @@ async function fetchClaudeModels(apiKey) {
   });
   if (!res.ok) throw new Error(`Claude model list failed (${res.status})`);
   const data = await res.json();
-  const models = (data.data || [])
-    .map((m) => ({ id: m.id, label: m.display_name || m.id, provider: 'claude' }));
+  const models = (data.data || []).map((m) => ({
+    id: m.id,
+    label: m.display_name || m.id,
+    provider: 'claude',
+    category: 'chat',
+    ...describeClaudeModel(m.id)
+  }));
   setCachedModels('claude', apiKey, models);
   return models;
 }
@@ -277,9 +326,64 @@ function streamChat(provider, apiKey, model, messages) {
   throw new Error('Unknown provider');
 }
 
+// ---------------- image generation / editing (gpt-image-*) ----------------
+// These are a different OpenAI API family (POST /v1/images/*, not chat
+// completions) — no streaming, and edits are multipart rather than JSON.
+// Both return a normalized [{ mediaType, data (base64) }] regardless of
+// how many images came back.
+
+async function generateImage(apiKey, model, prompt) {
+  const res = await fetch(`${OPENAI_BASE_URL}/v1/images/generations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, prompt, output_format: 'png' })
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`OpenAI image error ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const data = await res.json();
+  return (data.data || [])
+    .filter((d) => d.b64_json)
+    .map((d) => ({ mediaType: 'image/png', data: d.b64_json }));
+}
+
+// images: [{ mediaType, data (base64) }] — the reference image(s) to edit.
+async function editImage(apiKey, model, prompt, images) {
+  const form = new FormData();
+  form.append('model', model);
+  form.append('prompt', prompt);
+  for (const img of images) {
+    const buf = Buffer.from(img.data, 'base64');
+    const ext = (img.mediaType || 'image/png').split('/')[1] || 'png';
+    form.append('image[]', new Blob([buf], { type: img.mediaType || 'image/png' }), `image.${ext}`);
+  }
+  const res = await fetch(`${OPENAI_BASE_URL}/v1/images/edits`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` }, // no Content-Type — fetch sets the multipart boundary for FormData
+    body: form
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`OpenAI image edit error ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const data = await res.json();
+  return (data.data || [])
+    .filter((d) => d.b64_json)
+    .map((d) => ({ mediaType: 'image/png', data: d.b64_json }));
+}
+
+// One entry point: edits if reference images were supplied, else generates
+// from the prompt alone.
+function generateOrEditImage(apiKey, model, prompt, images) {
+  if (images && images.length) return editImage(apiKey, model, prompt, images);
+  return generateImage(apiKey, model, prompt);
+}
+
 module.exports = {
   streamChat,
   providerForModel,
   fetchOpenAIModels,
-  fetchClaudeModels
+  fetchClaudeModels,
+  generateOrEditImage
 };

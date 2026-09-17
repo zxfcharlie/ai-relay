@@ -9,6 +9,7 @@
     conversations: [],
     activeConvoId: null,
     models: [],
+    selectedModel: null, // { id, provider, category, label, ... }
     noModelsAvailable: false,
     pendingImages: [], // { mediaType, data, dataUrl }
     streaming: false
@@ -186,8 +187,6 @@
       data = { models: [] };
     }
     state.models = data.models || [];
-    const sel = $('#model-select');
-    sel.innerHTML = '';
 
     const hint = $('#model-error-hint');
     const errs = data.errors || {};
@@ -201,46 +200,115 @@
       hint.classList.add('hidden');
     }
 
+    state.noModelsAvailable = state.models.length === 0;
+    if (!state.selectedModel || !state.models.some((m) => m.id === state.selectedModel.id && m.provider === state.selectedModel.provider)) {
+      state.selectedModel = state.models[0] || null;
+    }
+    updateModelPickerButton();
+    renderModelPickerList($('#model-picker-search').value);
+  }
+
+  const PROVIDER_LABELS = { openai: 'OpenAI', claude: 'Claude' };
+  const CATEGORY_LABELS = { chat: '对话', image: '图像生成' };
+  const TIER_LABELS = { flagship: '旗舰', reasoning: '推理', fast: '轻量', balanced: '均衡', image: '图像' };
+
+  function updateModelPickerButton() {
+    $('#model-picker-label').textContent = state.selectedModel
+      ? state.selectedModel.label
+      : (state.noModelsAvailable ? '暂无可用模型' : '选择模型');
+  }
+
+  function renderModelPickerList(filterText) {
+    const list = $('#model-picker-list');
+    list.innerHTML = '';
+    const q = (filterText || '').trim().toLowerCase();
+
     if (!state.models.length) {
-      state.noModelsAvailable = true;
-      const opt = document.createElement('option');
-      opt.textContent = errLines.length ? '模型获取失败，见上方提示' : '暂无可用模型 · 请先在设置中配置 API 密钥';
-      opt.disabled = true;
-      opt.selected = true;
-      sel.appendChild(opt);
+      const empty = document.createElement('div');
+      empty.className = 'model-picker-empty';
+      empty.textContent = '暂无可用模型 · 请先在设置中配置 API 密钥';
+      list.appendChild(empty);
       return;
     }
 
-    state.noModelsAvailable = false;
-    const groups = { openai: null, claude: null };
-    const labels = { openai: 'OpenAI', claude: 'Claude' };
-    state.models.forEach((m) => {
-      if (!groups[m.provider]) {
-        groups[m.provider] = document.createElement('optgroup');
-        groups[m.provider].label = labels[m.provider] || m.provider;
-        sel.appendChild(groups[m.provider]);
-      }
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.label;
-      opt.dataset.provider = m.provider;
-      groups[m.provider].appendChild(opt);
+    const filtered = state.models.filter((m) => !q || m.id.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q) || (m.description || '').toLowerCase().includes(q));
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'model-picker-empty';
+      empty.textContent = '没有匹配的模型';
+      list.appendChild(empty);
+      return;
+    }
+
+    // Group by provider + category, e.g. "OpenAI · 对话", "OpenAI · 图像生成", "Claude · 对话".
+    const groups = new Map();
+    filtered.forEach((m) => {
+      const key = `${m.provider}:${m.category}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
     });
+
+    for (const [key, items] of groups) {
+      const [provider, category] = key.split(':');
+      const label = document.createElement('div');
+      label.className = 'model-group-label';
+      label.textContent = `${PROVIDER_LABELS[provider] || provider} · ${CATEGORY_LABELS[category] || category}`;
+      list.appendChild(label);
+
+      items.forEach((m) => {
+        const item = document.createElement('div');
+        const isSelected = state.selectedModel && state.selectedModel.id === m.id && state.selectedModel.provider === m.provider;
+        item.className = 'model-item' + (isSelected ? ' selected' : '');
+        const nameRow = document.createElement('div');
+        nameRow.className = 'model-item-name';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = m.label;
+        nameRow.appendChild(nameSpan);
+        if (m.tier) {
+          const pill = document.createElement('span');
+          pill.className = 'model-tier-pill';
+          pill.textContent = TIER_LABELS[m.tier] || m.tier;
+          nameRow.appendChild(pill);
+        }
+        item.appendChild(nameRow);
+        if (m.description) {
+          const desc = document.createElement('div');
+          desc.className = 'model-item-desc';
+          desc.textContent = m.description;
+          item.appendChild(desc);
+        }
+        item.addEventListener('click', () => selectModel(m));
+        list.appendChild(item);
+      });
+    }
   }
 
-  function selectedModel() {
-    const sel = $('#model-select');
-    const opt = sel.selectedOptions && sel.selectedOptions[0];
-    if (!opt || opt.disabled) return null;
-    return { model: opt.value, provider: opt.dataset.provider };
+  async function selectModel(m) {
+    state.selectedModel = m;
+    updateModelPickerButton();
+    closeModelPicker();
+    if (state.activeConvoId) {
+      try {
+        await api('PUT', `/api/conversations/${state.activeConvoId}`, { model: m.id, provider: m.provider, category: m.category });
+      } catch (err) { toast(err.message); }
+    }
   }
 
-  $('#model-select').addEventListener('change', async () => {
-    const picked = selectedModel();
-    if (!picked || !state.activeConvoId) return;
-    try {
-      await api('PUT', `/api/conversations/${state.activeConvoId}`, picked);
-    } catch (err) { toast(err.message); }
+  function openModelPicker() {
+    $('#model-picker-panel').classList.remove('hidden');
+    $('#model-picker-search').value = '';
+    renderModelPickerList('');
+    $('#model-picker-search').focus();
+  }
+  function closeModelPicker() {
+    $('#model-picker-panel').classList.add('hidden');
+  }
+  $('#model-picker-btn').addEventListener('click', () => {
+    $('#model-picker-panel').classList.contains('hidden') ? openModelPicker() : closeModelPicker();
+  });
+  $('#model-picker-search').addEventListener('input', (e) => renderModelPickerList(e.target.value));
+  document.addEventListener('click', (e) => {
+    if (!$('#model-picker').contains(e.target)) closeModelPicker();
   });
 
   async function loadConversations() {
@@ -294,10 +362,9 @@
       $('#welcome-view').classList.add('hidden');
       $('#messages').classList.remove('hidden');
       $('#composer').classList.remove('hidden');
-      const sel = $('#model-select');
-      if ([...sel.options].some((o) => o.value === data.conversation.model)) {
-        sel.value = data.conversation.model;
-      }
+      const match = state.models.find((m) => m.id === data.conversation.model && m.provider === data.conversation.provider);
+      state.selectedModel = match || { id: data.conversation.model, provider: data.conversation.provider, category: data.conversation.category || 'chat', label: data.conversation.model };
+      updateModelPickerButton();
       clearPendingImages();
       renderMessages(data.messages);
       renderConvoList();
@@ -443,11 +510,11 @@
 
   async function ensureConversation() {
     if (state.activeConvoId) return state.activeConvoId;
-    const picked = selectedModel();
+    const picked = state.selectedModel;
     if (!picked) throw new Error('请先在设置中配置 API 密钥并选择模型。');
-    const data = await api('POST', '/api/conversations', picked);
+    const data = await api('POST', '/api/conversations', { model: picked.id, provider: picked.provider, category: picked.category });
     state.activeConvoId = data.conversation.id;
-    state.conversations.unshift({ id: data.conversation.id, title: '新对话', model: picked.model, provider: picked.provider, updatedAt: data.conversation.updatedAt });
+    state.conversations.unshift({ id: data.conversation.id, title: '新对话', model: picked.id, provider: picked.provider, category: picked.category, updatedAt: data.conversation.updatedAt });
     $('#welcome-view').classList.add('hidden');
     $('#messages').classList.remove('hidden');
     $('#messages').innerHTML = '';
@@ -472,7 +539,7 @@
 
     clearPendingImages();
     appendMessageBubble('user', text, images.map((i) => i.dataUrl));
-    const { textEl: assistantTextEl } = appendMessageBubble('assistant', '');
+    const { bubble: assistantBubble, textEl: assistantTextEl } = appendMessageBubble('assistant', '');
     assistantTextEl.innerHTML = '<span class="typing-dot"></span><span class="typing-dot" style="animation-delay:.15s"></span><span class="typing-dot" style="animation-delay:.3s"></span>';
 
     state.streaming = true;
@@ -481,6 +548,7 @@
     let full = '';
     let firstDelta = true;
     let renderScheduled = false;
+    let resultImages = null;
 
     function scheduleRender() {
       if (renderScheduled) return;
@@ -522,6 +590,7 @@
           let parsed;
           try { parsed = JSON.parse(payload); } catch (e) { continue; }
           if (parsed.error) throw new Error(parsed.error);
+          if (parsed.images) resultImages = parsed.images;
           if (parsed.delta) {
             if (firstDelta) { assistantTextEl.textContent = ''; firstDelta = false; }
             full += parsed.delta;
@@ -529,8 +598,27 @@
           }
         }
       }
-      assistantTextEl.innerHTML = renderMarkdownLite(full);
-      highlightCodeIn(assistantTextEl);
+      if (resultImages && resultImages.length) {
+        // Image-generation result: swap the placeholder text for the image(s).
+        assistantTextEl.textContent = '';
+        const imgWrap = document.createElement('div');
+        imgWrap.className = 'msg-images';
+        resultImages.forEach((img) => {
+          const link = document.createElement('a');
+          link.href = img.url;
+          link.download = '';
+          link.target = '_blank';
+          link.rel = 'noopener';
+          const el = document.createElement('img');
+          el.src = img.url;
+          link.appendChild(el);
+          imgWrap.appendChild(link);
+        });
+        assistantBubble.insertBefore(imgWrap, assistantTextEl);
+      } else {
+        assistantTextEl.innerHTML = renderMarkdownLite(full);
+        highlightCodeIn(assistantTextEl);
+      }
     } catch (err) {
       assistantTextEl.textContent = (full || '') + `\n\n⚠️ ${err.message}`;
     } finally {
