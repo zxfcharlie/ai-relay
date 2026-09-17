@@ -332,11 +332,52 @@ function streamChat(provider, apiKey, model, messages) {
 // Both return a normalized [{ mediaType, data (base64) }] regardless of
 // how many images came back.
 
-async function generateImage(apiKey, model, prompt) {
+// ---------------- image generation / editing (gpt-image-*) ----------------
+// These are a different OpenAI API family (POST /v1/images/*, not chat
+// completions) — no streaming, and edits are multipart rather than JSON.
+// Both return a normalized [{ mediaType, data (base64) }] regardless of
+// how many images came back.
+
+// gpt-image models reject response_format outright (always b64_json), so
+// it's never sent — only these cost/output-affecting params are forwarded.
+const IMAGE_QUALITIES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max'];
+const IMAGE_BACKGROUNDS = ['auto', 'transparent', 'opaque'];
+const IMAGE_FORMATS = ['png', 'jpeg', 'webp'];
+
+// Whitelists/clamps whatever the caller (UI or relay API consumer) sent,
+// dropping anything that doesn't look like a legal value rather than
+// forwarding it blindly to OpenAI. Unknown/omitted fields just aren't
+// included in the upstream request, so OpenAI's own defaults apply.
+function sanitizeImageOptions(opts) {
+  opts = opts || {};
+  const out = {};
+  if (typeof opts.size === 'string' && (opts.size === 'auto' || /^\d{2,5}x\d{2,5}$/.test(opts.size))) {
+    out.size = opts.size;
+  }
+  if (IMAGE_QUALITIES.includes(opts.quality)) out.quality = opts.quality;
+  if (IMAGE_BACKGROUNDS.includes(opts.background)) out.background = opts.background;
+  if (IMAGE_FORMATS.includes(opts.outputFormat)) out.outputFormat = opts.outputFormat;
+  const n = Number(opts.n);
+  if (Number.isInteger(n) && n >= 1 && n <= 10) out.n = n;
+  return out;
+}
+
+function imageRequestFields(options) {
+  const o = sanitizeImageOptions(options);
+  const fields = { output_format: o.outputFormat || 'png' };
+  if (o.size) fields.size = o.size;
+  if (o.quality) fields.quality = o.quality;
+  if (o.background) fields.background = o.background;
+  if (o.n) fields.n = o.n;
+  return fields;
+}
+
+async function generateImage(apiKey, model, prompt, options) {
+  const fields = imageRequestFields(options);
   const res = await fetch(`${OPENAI_BASE_URL}/v1/images/generations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, prompt, output_format: 'png' })
+    body: JSON.stringify({ model, prompt, ...fields })
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -345,14 +386,16 @@ async function generateImage(apiKey, model, prompt) {
   const data = await res.json();
   return (data.data || [])
     .filter((d) => d.b64_json)
-    .map((d) => ({ mediaType: 'image/png', data: d.b64_json }));
+    .map((d) => ({ mediaType: `image/${fields.output_format}`, data: d.b64_json }));
 }
 
 // images: [{ mediaType, data (base64) }] — the reference image(s) to edit.
-async function editImage(apiKey, model, prompt, images) {
+async function editImage(apiKey, model, prompt, images, options) {
+  const fields = imageRequestFields(options);
   const form = new FormData();
   form.append('model', model);
   form.append('prompt', prompt);
+  for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
   for (const img of images) {
     const buf = Buffer.from(img.data, 'base64');
     const ext = (img.mediaType || 'image/png').split('/')[1] || 'png';
@@ -370,14 +413,15 @@ async function editImage(apiKey, model, prompt, images) {
   const data = await res.json();
   return (data.data || [])
     .filter((d) => d.b64_json)
-    .map((d) => ({ mediaType: 'image/png', data: d.b64_json }));
+    .map((d) => ({ mediaType: `image/${fields.output_format}`, data: d.b64_json }));
 }
 
 // One entry point: edits if reference images were supplied, else generates
-// from the prompt alone.
-function generateOrEditImage(apiKey, model, prompt, images) {
-  if (images && images.length) return editImage(apiKey, model, prompt, images);
-  return generateImage(apiKey, model, prompt);
+// from the prompt alone. `options` is whatever sanitizeImageOptions accepts
+// (size, quality, background, outputFormat, n) — all optional.
+function generateOrEditImage(apiKey, model, prompt, images, options) {
+  if (images && images.length) return editImage(apiKey, model, prompt, images, options);
+  return generateImage(apiKey, model, prompt, options);
 }
 
 module.exports = {
@@ -385,5 +429,9 @@ module.exports = {
   providerForModel,
   fetchOpenAIModels,
   fetchClaudeModels,
-  generateOrEditImage
+  generateOrEditImage,
+  sanitizeImageOptions,
+  IMAGE_QUALITIES,
+  IMAGE_BACKGROUNDS,
+  IMAGE_FORMATS
 };

@@ -57,6 +57,15 @@ docker run -d --name ai-relay \
   - 只输入文字 → 按文生图（调用 OpenAI 的 `/v1/images/generations`）
   - 附带一张或多张参考图 + 文字指令（比如"改为黑色"）→ 按图编辑（调用 `/v1/images/edits`），会把上传的图作为参考图交给模型重新生成
   - 生成结果直接以图片形式显示在对话里，可点击预览/下载。目前图像生成仅支持 OpenAI（Claude 没有生图接口）。
+  - 选中图像生成模型后，顶部会出现一个"⚙️ 生成设置"按钮，可以设置：
+    - **尺寸**：自动 / 1024×1024（方形）/ 1536×1024（横向）/ 1024×1536（竖向）/ 自定义（`宽x高`，需模型支持任意分辨率，如 `gpt-image-2`）
+    - **质量**：自动 / 低 / 中 / 高 / 超高 / 最高——**质量是影响费用最主要的参数**，图越精细、耗费的图像 token 越多，先用"低"试跑没问题再调高
+    - **数量**：一次生成几张（1–10），会线性叠加费用
+    - **格式**：PNG / JPEG / WebP
+    - **背景**：自动 / 不透明 / 透明（仅对支持透明背景的格式有意义）
+    
+    这些设置保存在每个对话上，不同对话可以用不同的参数；对应到 OpenAI 官方接口的 `size` / `quality` / `n` / `output_format` / `background` 字段，
+    未设置的字段不会传给 OpenAI，由其自行使用默认值。
 - **图片不会塞进 `db.json`、也不会无限占用磁盘**：上传后只写一份临时文件（用于事后在聊天记录里预览/下载），
   聊天界面里显示的是一个 `/api/images/...` 链接（需要登录、且只有本人能访问），而不是把图片编码进接口响应里。
   这些临时文件按管理员设置的"图片自动清理（天）"（默认 3 天）自动删除，改成 0 则表示**模型用完这张图后立即删除，不再支持事后预览/下载**——
@@ -78,8 +87,8 @@ docker run -d --name ai-relay \
 - `POST /v1/chat/completions` —— 对话（含视觉输入）。服务会根据你请求的 `model` 名称自动路由到 OpenAI 或 Claude
   （也可以在请求体里显式传 `"provider": "openai"` 或 `"provider": "claude"` 来覆盖自动判断，适合自定义/微调模型名的场景），
   并统一以 OpenAI 的响应格式返回（包括流式响应、以及图片输入的 `image_url` 格式，会被自动转换成 Claude 需要的格式）。
-- `POST /v1/images/generations` —— 文生图（对应 SDK 里的 `client.images.generate()`）。
-- `POST /v1/images/edits` —— 图片编辑，multipart 上传，`image` 或 `image[]` 字段（对应 SDK 里的 `client.images.edit()`）。
+- `POST /v1/images/generations` —— 文生图（对应 SDK 里的 `client.images.generate()`），支持 `size` / `quality` / `n` / `output_format` / `background` 参数。
+- `POST /v1/images/edits` —— 图片编辑，multipart 上传，`image` 或 `image[]` 字段（对应 SDK 里的 `client.images.edit()`），同样支持上面这些参数。
 - `GET /v1/models` —— 除了标准的 `id`/`owned_by` 字段，额外带了 `category`（`chat`/`image`）、`tier`（旗舰/推理/轻量/均衡/图像）、
   `description` 三个字段，方便你在自己的客户端里也做分类和搜索。
 
@@ -96,17 +105,24 @@ curl http://<你的服务器>:8511/v1/chat/completions \
         "stream": false
       }'
 
-# 文生图
+# 文生图，控制尺寸/质量/数量
 curl http://<你的服务器>:8511/v1/images/generations \
   -H "Authorization: Bearer rk-你的中转密钥" \
   -H "Content-Type: application/json" \
-  -d '{"model": "gpt-image-2", "prompt": "一只戴墨镜的柴犬，插画风格"}'
+  -d '{
+        "model": "gpt-image-2",
+        "prompt": "一只戴墨镜的柴犬，插画风格",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1
+      }'
 
-# 图片编辑
+# 图片编辑，同样可以带这些参数
 curl http://<你的服务器>:8511/v1/images/edits \
   -H "Authorization: Bearer rk-你的中转密钥" \
   -F "model=gpt-image-2" \
   -F "prompt=把包的颜色改成黑色" \
+  -F "quality=medium" \
   -F "image[]=@bag.png"
 ```
 

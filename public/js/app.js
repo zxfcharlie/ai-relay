@@ -10,6 +10,7 @@
     activeConvoId: null,
     models: [],
     selectedModel: null, // { id, provider, category, label, ... }
+    imageOptions: { size: 'auto', quality: 'auto', n: 1, outputFormat: 'png', background: 'auto' },
     noModelsAvailable: false,
     pendingImages: [], // { mediaType, data, dataUrl }
     streaming: false
@@ -216,6 +217,9 @@
     $('#model-picker-label').textContent = state.selectedModel
       ? state.selectedModel.label
       : (state.noModelsAvailable ? '暂无可用模型' : '选择模型');
+    const isImage = state.selectedModel && state.selectedModel.category === 'image';
+    $('#image-opts').classList.toggle('hidden', !isImage);
+    if (!isImage) closeImageOpts();
   }
 
   function renderModelPickerList(filterText) {
@@ -311,6 +315,76 @@
     if (!$('#model-picker').contains(e.target)) closeModelPicker();
   });
 
+  // ---------------- image generation options (size / quality / n / format / background) ----------------
+
+  const IMAGE_SIZE_PRESETS = ['auto', '1024x1024', '1536x1024', '1024x1536'];
+
+  function syncImageOptsControls() {
+    const o = state.imageOptions;
+    if (IMAGE_SIZE_PRESETS.includes(o.size)) {
+      $('#opt-size').value = o.size;
+      $('#opt-size-custom-row').classList.add('hidden');
+    } else {
+      $('#opt-size').value = 'custom';
+      $('#opt-size-custom-row').classList.remove('hidden');
+      $('#opt-size-custom').value = o.size || '';
+    }
+    $('#opt-quality').value = o.quality || 'auto';
+    $('#opt-n').value = o.n || 1;
+    $('#opt-format').value = o.outputFormat || 'png';
+    $('#opt-background').value = o.background || 'auto';
+  }
+
+  async function persistImageOptions() {
+    if (!state.activeConvoId) return;
+    try {
+      await api('PUT', `/api/conversations/${state.activeConvoId}`, { imageOptions: state.imageOptions });
+    } catch (err) { toast(err.message); }
+  }
+
+  $('#opt-size').addEventListener('change', (e) => {
+    if (e.target.value === 'custom') {
+      $('#opt-size-custom-row').classList.remove('hidden');
+      state.imageOptions.size = $('#opt-size-custom').value.trim() || 'auto';
+    } else {
+      $('#opt-size-custom-row').classList.add('hidden');
+      state.imageOptions.size = e.target.value;
+    }
+    persistImageOptions();
+  });
+  $('#opt-size-custom').addEventListener('change', (e) => {
+    const v = e.target.value.trim();
+    if (/^\d{2,5}x\d{2,5}$/.test(v)) {
+      state.imageOptions.size = v;
+      persistImageOptions();
+    } else {
+      toast('尺寸格式应为 宽x高，例如 1536x864');
+    }
+  });
+  $('#opt-quality').addEventListener('change', (e) => { state.imageOptions.quality = e.target.value; persistImageOptions(); });
+  $('#opt-n').addEventListener('change', (e) => {
+    const n = Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 1));
+    e.target.value = n;
+    state.imageOptions.n = n;
+    persistImageOptions();
+  });
+  $('#opt-format').addEventListener('change', (e) => { state.imageOptions.outputFormat = e.target.value; persistImageOptions(); });
+  $('#opt-background').addEventListener('change', (e) => { state.imageOptions.background = e.target.value; persistImageOptions(); });
+
+  function openImageOpts() {
+    syncImageOptsControls();
+    $('#image-opts-panel').classList.remove('hidden');
+  }
+  function closeImageOpts() {
+    $('#image-opts-panel').classList.add('hidden');
+  }
+  $('#image-opts-btn').addEventListener('click', () => {
+    $('#image-opts-panel').classList.contains('hidden') ? openImageOpts() : closeImageOpts();
+  });
+  document.addEventListener('click', (e) => {
+    if (!$('#image-opts').contains(e.target)) closeImageOpts();
+  });
+
   async function loadConversations() {
     const data = await api('GET', '/api/conversations');
     state.conversations = data.conversations;
@@ -364,6 +438,9 @@
       $('#composer').classList.remove('hidden');
       const match = state.models.find((m) => m.id === data.conversation.model && m.provider === data.conversation.provider);
       state.selectedModel = match || { id: data.conversation.model, provider: data.conversation.provider, category: data.conversation.category || 'chat', label: data.conversation.model };
+      if (data.conversation.imageOptions) {
+        state.imageOptions = { ...state.imageOptions, ...data.conversation.imageOptions };
+      }
       updateModelPickerButton();
       clearPendingImages();
       renderMessages(data.messages);
@@ -512,7 +589,12 @@
     if (state.activeConvoId) return state.activeConvoId;
     const picked = state.selectedModel;
     if (!picked) throw new Error('请先在设置中配置 API 密钥并选择模型。');
-    const data = await api('POST', '/api/conversations', { model: picked.id, provider: picked.provider, category: picked.category });
+    const data = await api('POST', '/api/conversations', {
+      model: picked.id,
+      provider: picked.provider,
+      category: picked.category,
+      imageOptions: picked.category === 'image' ? state.imageOptions : undefined
+    });
     state.activeConvoId = data.conversation.id;
     state.conversations.unshift({ id: data.conversation.id, title: '新对话', model: picked.id, provider: picked.provider, category: picked.category, updatedAt: data.conversation.updatedAt });
     $('#welcome-view').classList.add('hidden');

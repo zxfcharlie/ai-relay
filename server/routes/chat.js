@@ -2,7 +2,7 @@ const express = require('express');
 const { nanoid } = require('nanoid');
 const { getDB, save } = require('../db');
 const { requireAuth } = require('../auth');
-const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage } = require('../services/providers');
+const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage, sanitizeImageOptions } = require('../services/providers');
 const { resolveApiKey } = require('../services/keys');
 const { saveImage, readImageBase64, deleteImageFile } = require('../services/images');
 const { purgeImagesForMessage } = require('../services/cleanup');
@@ -50,7 +50,7 @@ router.get('/conversations', requireAuth, (req, res) => {
 });
 
 router.post('/conversations', requireAuth, (req, res) => {
-  const { model, provider, category } = req.body || {};
+  const { model, provider, category, imageOptions } = req.body || {};
   if (!model || !provider) return res.status(400).json({ error: 'model and provider are required.' });
   const db = getDB();
   const convo = {
@@ -60,6 +60,7 @@ router.post('/conversations', requireAuth, (req, res) => {
     model,
     provider,
     category: category === 'image' ? 'image' : 'chat',
+    imageOptions: sanitizeImageOptions(imageOptions),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -100,7 +101,7 @@ router.delete('/conversations/:id', requireAuth, (req, res) => {
 });
 
 router.put('/conversations/:id', requireAuth, (req, res) => {
-  const { title, model, provider, category } = req.body || {};
+  const { title, model, provider, category, imageOptions } = req.body || {};
   const db = getDB();
   const convo = db.conversations.find((c) => c.id === req.params.id && c.userId === req.user.id);
   if (!convo) return res.status(404).json({ error: 'Conversation not found.' });
@@ -108,6 +109,9 @@ router.put('/conversations/:id', requireAuth, (req, res) => {
   if (typeof model === 'string') convo.model = model;
   if (typeof provider === 'string') convo.provider = provider;
   if (category === 'image' || category === 'chat') convo.category = category;
+  if (imageOptions && typeof imageOptions === 'object') {
+    convo.imageOptions = { ...(convo.imageOptions || {}), ...sanitizeImageOptions(imageOptions) };
+  }
   save();
   res.json({ conversation: convo });
 });
@@ -180,7 +184,7 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
       const refImages = savedImages
         .map((img) => ({ mediaType: img.mediaType, data: readImageBase64(img.filename) }))
         .filter((i) => i.data);
-      const results = await generateOrEditImage(apiKey, convo.model, text || '编辑这张图片', refImages);
+      const results = await generateOrEditImage(apiKey, convo.model, text || '编辑这张图片', refImages, convo.imageOptions);
       if (!results.length) throw new Error('模型没有返回图片。');
 
       if (Number(db.settings.imageRetentionDays) === 0) purgeImagesForMessage(userMsg);

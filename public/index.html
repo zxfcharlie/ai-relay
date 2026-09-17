@@ -71,6 +71,61 @@
           <div class="model-picker-list" id="model-picker-list"></div>
         </div>
       </div>
+
+      <div class="model-picker hidden" id="image-opts">
+        <button class="model-picker-btn" id="image-opts-btn" type="button" title="图片生成设置">
+          <span>⚙️ 生成设置</span>
+        </button>
+        <div class="model-picker-panel image-opts-panel hidden" id="image-opts-panel">
+          <div class="opt-row">
+            <label>尺寸</label>
+            <select id="opt-size">
+              <option value="auto">自动</option>
+              <option value="1024x1024">1024×1024 · 方形</option>
+              <option value="1536x1024">1536×1024 · 横向</option>
+              <option value="1024x1536">1024×1536 · 竖向</option>
+              <option value="custom">自定义…</option>
+            </select>
+          </div>
+          <div class="opt-row hidden" id="opt-size-custom-row">
+            <label></label>
+            <input id="opt-size-custom" type="text" placeholder="宽x高，如 1536x864">
+          </div>
+          <div class="opt-row">
+            <label>质量</label>
+            <select id="opt-quality">
+              <option value="auto">自动</option>
+              <option value="low">低（省钱）</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+              <option value="xhigh">超高</option>
+              <option value="max">最高（最贵）</option>
+            </select>
+          </div>
+          <div class="opt-row">
+            <label>数量</label>
+            <input id="opt-n" type="number" min="1" max="10" value="1">
+          </div>
+          <div class="opt-row">
+            <label>格式</label>
+            <select id="opt-format">
+              <option value="png">PNG</option>
+              <option value="jpeg">JPEG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+          <div class="opt-row">
+            <label>背景</label>
+            <select id="opt-background">
+              <option value="auto">自动</option>
+              <option value="opaque">不透明</option>
+              <option value="transparent">透明</option>
+            </select>
+          </div>
+          <div class="field-hint" style="padding:0 10px 10px;">质量越高、尺寸越大，生成费用越高，按需选择。</div>
+        </div>
+      </div>
+
       <div style="width:1px;"></div>
     </div>
     <div class="model-error-hint hidden" id="model-error-hint"></div>

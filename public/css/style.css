@@ -439,6 +439,36 @@ a { color: inherit; }
   font-size: 13px;
 }
 
+.image-opts-panel {
+  width: 260px;
+  padding: 10px 0;
+}
+
+.opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+}
+.opt-row label {
+  font-size: 13px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.opt-row select, .opt-row input {
+  flex: 1;
+  max-width: 150px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  outline: none;
+  font-size: 12.5px;
+}
+.opt-row select:focus, .opt-row input:focus { border-color: var(--accent); }
+
 .model-error-hint {
   margin: 0 20px 10px;
   padding: 8px 12px;

@@ -145,11 +145,12 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
 });
 
 // POST /v1/images/generations — OpenAI-compatible text-to-image. JSON body:
-// { model, prompt, ... }. Response shape matches OpenAI's Images API
-// (data: [{ b64_json }]) so the official SDK's client.images.generate()
-// works unmodified against this base URL.
+// { model, prompt, size?, quality?, background?, output_format?, n? }.
+// Response shape matches OpenAI's Images API (data: [{ b64_json }]) so the
+// official SDK's client.images.generate() works unmodified against this
+// base URL, cost-affecting params included.
 router.post('/images/generations', relayAuth, async (req, res) => {
-  const { model, prompt } = req.body || {};
+  const { model, prompt, size, quality, background, output_format: outputFormat, n } = req.body || {};
   if (!model || !prompt) {
     return res.status(400).json({ error: { message: 'Request must include "model" and "prompt".' } });
   }
@@ -158,7 +159,7 @@ router.post('/images/generations', relayAuth, async (req, res) => {
     return res.status(400).json({ error: { message: 'No OpenAI API key is configured for this account.' } });
   }
   try {
-    const images = await generateOrEditImage(apiKey, model, prompt, []);
+    const images = await generateOrEditImage(apiKey, model, prompt, [], { size, quality, background, outputFormat, n });
     res.json({
       created: Math.floor(Date.now() / 1000),
       data: images.map((img) => ({ b64_json: img.data }))
@@ -169,10 +170,11 @@ router.post('/images/generations', relayAuth, async (req, res) => {
 });
 
 // POST /v1/images/edits — OpenAI-compatible image editing. multipart/form-
-// data: model, prompt, and one or more reference images under "image" or
-// "image[]" (matches client.images.edit() from the official SDK).
+// data: model, prompt, size?, quality?, background?, output_format?, n?,
+// and one or more reference images under "image" or "image[]" (matches
+// client.images.edit() from the official SDK).
 router.post('/images/edits', relayAuth, upload.fields([{ name: 'image' }, { name: 'image[]' }]), async (req, res) => {
-  const { model, prompt } = req.body || {};
+  const { model, prompt, size, quality, background, output_format: outputFormat, n } = req.body || {};
   const files = [...((req.files && req.files.image) || []), ...((req.files && req.files['image[]']) || [])];
   if (!model || !prompt) {
     return res.status(400).json({ error: { message: 'Request must include "model" and "prompt".' } });
@@ -186,7 +188,7 @@ router.post('/images/edits', relayAuth, upload.fields([{ name: 'image' }, { name
   }
   try {
     const refImages = files.map((f) => ({ mediaType: f.mimetype || 'image/png', data: f.buffer.toString('base64') }));
-    const images = await generateOrEditImage(apiKey, model, prompt, refImages);
+    const images = await generateOrEditImage(apiKey, model, prompt, refImages, { size, quality, background, outputFormat, n });
     res.json({
       created: Math.floor(Date.now() / 1000),
       data: images.map((img) => ({ b64_json: img.data }))
