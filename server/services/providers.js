@@ -242,14 +242,24 @@ async function* sseLines(response) {
 
 // ---------------- streaming chat ----------------
 
-async function* streamOpenAI(apiKey, model, messages) {
+// `usage`, if passed, is a plain object this mutates in place with
+// { inputTokens, outputTokens, cachedInputTokens } as the provider reports
+// them — read it after the generator finishes (async generators don't
+// expose their own return value through `for await`, so an out-param is
+// the simplest way to hand this back to the caller).
+async function* streamOpenAI(apiKey, model, messages, usage) {
   const res = await fetch(`${OPENAI_BASE_URL}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`
     },
-    body: JSON.stringify({ model, messages: toOpenAIMessages(messages), stream: true })
+    body: JSON.stringify({
+      model,
+      messages: toOpenAIMessages(messages),
+      stream: true,
+      stream_options: { include_usage: true }
+    })
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
@@ -261,13 +271,21 @@ async function* streamOpenAI(apiKey, model, messages) {
       const parsed = JSON.parse(data);
       const delta = parsed.choices && parsed.choices[0] && parsed.choices[0].delta;
       if (delta && delta.content) yield delta.content;
+      // The include_usage chunk has empty/no choices and carries the
+      // request's final token counts.
+      if (usage && parsed.usage) {
+        usage.inputTokens = parsed.usage.prompt_tokens;
+        usage.outputTokens = parsed.usage.completion_tokens;
+        const cached = parsed.usage.prompt_tokens_details && parsed.usage.prompt_tokens_details.cached_tokens;
+        if (cached) usage.cachedInputTokens = cached;
+      }
     } catch (e) {
       // ignore malformed chunk
     }
   }
 }
 
-async function* streamClaude(apiKey, model, messages, maxTokens = 8192) {
+async function* streamClaude(apiKey, model, messages, maxTokens = 8192, usage) {
   const { system, messages: converted } = toClaudeMessages(messages);
   const res = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
@@ -291,7 +309,7 @@ async function* streamClaude(apiKey, model, messages, maxTokens = 8192) {
     // retry once with a conservative value instead of failing the whole
     // message over a fixed constant that doesn't fit every model.
     if (res.status === 400 && maxTokens > 4096 && /max_tokens/i.test(text)) {
-      yield* streamClaude(apiKey, model, messages, 4096);
+      yield* streamClaude(apiKey, model, messages, 4096, usage);
       return;
     }
     throw new Error(`Claude error ${res.status}: ${text.slice(0, 500)}`);
@@ -305,6 +323,28 @@ async function* streamClaude(apiKey, model, messages, maxTokens = 8192) {
         }
       } catch (e) {
         // ignore malformed chunk
+      }
+    } else if (event === 'message_start') {
+      // Carries prompt-side usage (input + any cache read/write tokens).
+      if (usage) {
+        try {
+          const parsed = JSON.parse(data);
+          const u = parsed.message && parsed.message.usage;
+          if (u) {
+            usage.inputTokens = u.input_tokens;
+            usage.cachedInputTokens = (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+          }
+        } catch (e) { /* ignore */ }
+      }
+    } else if (event === 'message_delta') {
+      // Carries the (cumulative, so far) output token count.
+      if (usage) {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.usage && typeof parsed.usage.output_tokens === 'number') {
+            usage.outputTokens = parsed.usage.output_tokens;
+          }
+        } catch (e) { /* ignore */ }
       }
     } else if (event === 'error') {
       let message = 'Claude error';
@@ -320,9 +360,10 @@ async function* streamClaude(apiKey, model, messages, maxTokens = 8192) {
 // Unified entry point: provider is 'openai' | 'claude'. `messages` items are
 // { role, content } where content may be a string, a normalized parts
 // array, or an OpenAI-style vision content array — see normalizeContent.
-function streamChat(provider, apiKey, model, messages) {
-  if (provider === 'openai') return streamOpenAI(apiKey, model, messages);
-  if (provider === 'claude') return streamClaude(apiKey, model, messages);
+// `usage`, if passed, is populated in place — see streamOpenAI/streamClaude.
+function streamChat(provider, apiKey, model, messages, usage) {
+  if (provider === 'openai') return streamOpenAI(apiKey, model, messages, usage);
+  if (provider === 'claude') return streamClaude(apiKey, model, messages, 8192, usage);
   throw new Error('Unknown provider');
 }
 

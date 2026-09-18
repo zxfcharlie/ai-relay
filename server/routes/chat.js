@@ -6,6 +6,7 @@ const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage, s
 const { resolveApiKey } = require('../services/keys');
 const { saveImage, readImageBase64, deleteImageFile } = require('../services/images');
 const { purgeImagesForMessage } = require('../services/cleanup');
+const { recordUsage } = require('../services/usage');
 
 const router = express.Router();
 
@@ -220,8 +221,9 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
     .map((m) => ({ role: m.role, content: buildContent(m) }));
 
   let full = '';
+  const usage = {};
   try {
-    for await (const delta of streamChat(provider, apiKey, convo.model, history)) {
+    for await (const delta of streamChat(provider, apiKey, convo.model, history, usage)) {
       full += delta;
       res.write(`data: ${JSON.stringify({ delta })}\n\n`);
     }
@@ -229,6 +231,7 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
     // The model has already been sent whatever images it could reach;
     // honor a "don't keep them" (0-day) setting even on failure.
     if (Number(db.settings.imageRetentionDays) === 0) purgeImagesForMessage(userMsg);
+    recordUsage(db, { userId: req.user.id, conversationId: convo.id, provider, model: convo.model, ...usage });
     save();
     res.write(`data: ${JSON.stringify({ error: err.message || 'Upstream error.' })}\n\n`);
     res.write('data: [DONE]\n\n');
@@ -236,6 +239,7 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
   }
 
   if (Number(db.settings.imageRetentionDays) === 0) purgeImagesForMessage(userMsg);
+  recordUsage(db, { userId: req.user.id, conversationId: convo.id, provider, model: convo.model, ...usage });
 
   const assistantMsg = {
     id: nanoid(),

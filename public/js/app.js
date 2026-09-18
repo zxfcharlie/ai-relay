@@ -96,6 +96,7 @@
   // ---------------- auth screen ----------------
 
   let authMode = 'login';
+  let authRequireApproval = false;
 
   function setAuthMode(mode, opts) {
     opts = opts || {};
@@ -109,6 +110,7 @@
       $('#auth-switch-btn').textContent = '去登录';
       $('#auth-password').setAttribute('autocomplete', 'new-password');
       $('#auth-first-badge').classList.toggle('hidden', !opts.firstUser);
+      $('#auth-approval-hint').classList.toggle('hidden', opts.firstUser || !authRequireApproval);
     } else {
       $('#auth-title').textContent = '欢迎回来';
       $('#auth-sub').textContent = '登录以继续对话';
@@ -117,6 +119,7 @@
       $('#auth-switch-btn').textContent = '立即注册';
       $('#auth-password').setAttribute('autocomplete', 'current-password');
       $('#auth-first-badge').classList.add('hidden');
+      $('#auth-approval-hint').classList.add('hidden');
     }
   }
 
@@ -133,6 +136,13 @@
     $('#auth-submit').disabled = true;
     try {
       const data = await api('POST', authMode === 'login' ? '/api/auth/login' : '/api/auth/register', { username, password });
+      if (data.pendingApproval) {
+        $('#auth-username').value = '';
+        $('#auth-password').value = '';
+        $('.auth-card:not(.hidden)').classList.add('hidden');
+        $('#auth-pending-view').classList.remove('hidden');
+        return;
+      }
       state.user = data.user;
       showApp();
     } catch (err) {
@@ -143,9 +153,16 @@
     }
   });
 
+  $('#auth-pending-back').addEventListener('click', () => {
+    $('#auth-pending-view').classList.add('hidden');
+    $all('.auth-card').forEach((el) => { if (el.id !== 'auth-pending-view') el.classList.remove('hidden'); });
+    setAuthMode('login');
+  });
+
   async function initAuthScreen() {
     try {
       const status = await api('GET', '/api/auth/status');
+      authRequireApproval = !!status.requireApproval;
       if (!status.hasUsers) {
         setAuthMode('register', { firstUser: true });
       } else {
@@ -820,24 +837,61 @@
       $('#admin-claude-key').value = '';
       $('#admin-claude-key').placeholder = data.settings.hasGlobalClaudeKey ? '已配置 · 输入新值以替换' : 'sk-ant-...';
       $('#admin-allow-registration').checked = !!data.settings.allowRegistration;
+      $('#admin-require-approval').checked = !!data.settings.requireApproval;
       $('#admin-image-retention').value = data.settings.imageRetentionDays;
+      $('#admin-monthly-budget').value = data.settings.monthlyBudgetUSD || '';
+
+      renderPricingList(data.settings.pricing || {});
 
       const body = $('#admin-users-body');
       body.innerHTML = '';
       data.users.forEach((u) => {
         const tr = document.createElement('tr');
         const isSelf = u.id === state.user.id;
+        const statusLabel = u.status === 'pending' ? '待审核' : (u.status === 'active' ? '已启用' : '已暂停');
         tr.innerHTML = `
           <td></td>
           <td><span class="pill ${u.isAdmin ? 'pill-admin' : ''}"></span></td>
+          <td><span class="pill status-${u.status}"></span></td>
           <td style="font-family:monospace; font-size:11.5px; color:var(--text-faint);"></td>
           <td></td>`;
         tr.children[0].textContent = u.username;
         tr.children[1].querySelector('.pill').textContent = u.isAdmin ? '管理员' : '成员';
-        tr.children[2].textContent = u.relayApiKey.slice(0, 14) + '…';
+        tr.children[2].querySelector('.pill').textContent = statusLabel;
+        tr.children[3].textContent = u.relayApiKey.slice(0, 14) + '…';
         const actions = document.createElement('div');
         actions.style.display = 'flex';
         actions.style.gap = '6px';
+
+        if (u.status === 'pending') {
+          const approveBtn = document.createElement('button');
+          approveBtn.className = 'btn btn-ghost';
+          approveBtn.style.padding = '4px 8px';
+          approveBtn.style.fontSize = '12px';
+          approveBtn.style.color = 'var(--accent)';
+          approveBtn.textContent = '通过';
+          approveBtn.addEventListener('click', async () => {
+            try {
+              await api('PUT', `/api/settings/admin/users/${u.id}/status`, { status: 'active' });
+              loadAdminIntoModal();
+            } catch (err) { toast(err.message); }
+          });
+          actions.appendChild(approveBtn);
+        } else {
+          const suspendBtn = document.createElement('button');
+          suspendBtn.className = 'btn btn-ghost';
+          suspendBtn.style.padding = '4px 8px';
+          suspendBtn.style.fontSize = '12px';
+          suspendBtn.textContent = u.status === 'active' ? '暂停' : '恢复';
+          suspendBtn.disabled = isSelf;
+          suspendBtn.addEventListener('click', async () => {
+            try {
+              await api('PUT', `/api/settings/admin/users/${u.id}/status`, { status: u.status === 'active' ? 'pending' : 'active' });
+              loadAdminIntoModal();
+            } catch (err) { toast(err.message); }
+          });
+          actions.appendChild(suspendBtn);
+        }
 
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'btn btn-ghost';
@@ -868,11 +922,50 @@
 
         actions.appendChild(toggleBtn);
         actions.appendChild(delBtn);
-        tr.children[3].appendChild(actions);
+        tr.children[4].appendChild(actions);
         body.appendChild(tr);
       });
     } catch (err) { toast(err.message); }
   }
+
+  function renderPricingList(pricing) {
+    const list = $('#admin-pricing-list');
+    list.innerHTML = '';
+    const chatModels = state.models.filter((m) => m.category === 'chat');
+    if (!chatModels.length) {
+      list.innerHTML = '<div class="field-hint">还没有可用模型（先在上方配置 API 密钥）。</div>';
+      return;
+    }
+    chatModels.forEach((m) => {
+      const rate = pricing[m.id] || {};
+      const row = document.createElement('div');
+      row.className = 'opt-row';
+      row.style.padding = '6px 0';
+      row.innerHTML = `
+        <label style="flex:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${m.id}">${m.label}</label>
+        <input type="number" min="0" step="0.01" placeholder="输入 $/1M" data-price-model="${m.id}" data-price-field="inputPer1M" style="max-width:90px;">
+        <input type="number" min="0" step="0.01" placeholder="输出 $/1M" data-price-model="${m.id}" data-price-field="outputPer1M" style="max-width:90px;">`;
+      row.querySelector('[data-price-field="inputPer1M"]').value = rate.inputPer1M != null ? rate.inputPer1M : '';
+      row.querySelector('[data-price-field="outputPer1M"]').value = rate.outputPer1M != null ? rate.outputPer1M : '';
+      list.appendChild(row);
+    });
+  }
+
+  $('#save-pricing-btn').addEventListener('click', async () => {
+    const pricing = {};
+    $all('[data-price-model]').forEach((input) => {
+      const model = input.dataset.priceModel;
+      const field = input.dataset.priceField;
+      const val = input.value.trim();
+      if (val === '') return;
+      pricing[model] = pricing[model] || {};
+      pricing[model][field] = Number(val);
+    });
+    try {
+      await api('PUT', '/api/settings/admin/pricing', { pricing });
+      toast('已保存价格');
+    } catch (err) { toast(err.message); }
+  });
 
   $('#save-keys-btn').addEventListener('click', async () => {
     const payload = {};
@@ -905,7 +998,9 @@
     const payload = {
       siteName: $('#admin-site-name').value.trim(),
       allowRegistration: $('#admin-allow-registration').checked,
-      imageRetentionDays: $('#admin-image-retention').value
+      requireApproval: $('#admin-require-approval').checked,
+      imageRetentionDays: $('#admin-image-retention').value,
+      monthlyBudgetUSD: $('#admin-monthly-budget').value.trim() === '' ? null : $('#admin-monthly-budget').value
     };
     const openaiInput = $('#admin-openai-key');
     const claudeInput = $('#admin-claude-key');
@@ -936,6 +1031,142 @@
       navigator.clipboard.writeText(text).then(() => toast('已复制'));
     });
   });
+
+  // ---------------- usage dashboard ----------------
+
+  let usageScope = 'self';
+  let usageChart = null;
+
+  function formatTokens(n) {
+    n = n || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+  function formatCost(n) {
+    return n == null ? '—' : '$' + n.toFixed(2);
+  }
+
+  function openUsageModal() {
+    $('#usage-modal').classList.remove('hidden');
+    $('#usage-scope-toggle').classList.toggle('hidden', !state.user.isAdmin);
+    loadUsage();
+  }
+  function closeUsageModal() {
+    $('#usage-modal').classList.add('hidden');
+  }
+  $('#usage-dashboard-btn').addEventListener('click', openUsageModal);
+  $('#usage-close').addEventListener('click', closeUsageModal);
+  $('#usage-modal').addEventListener('click', (e) => { if (e.target.id === 'usage-modal') closeUsageModal(); });
+  $('#usage-scope-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('.usage-scope-btn');
+    if (!btn) return;
+    usageScope = btn.dataset.scope;
+    $all('.usage-scope-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    loadUsage();
+  });
+
+  async function loadUsage() {
+    let data;
+    try {
+      data = await api('GET', `/api/usage/summary?scope=${usageScope}`);
+    } catch (err) {
+      toast(err.message);
+      return;
+    }
+
+    const cards = $('#usage-cards');
+    cards.innerHTML = '';
+    [
+      ['今日', data.today],
+      ['近 7 天', data.last7Days],
+      ['累计', data.lifetime]
+    ].forEach(([label, s]) => {
+      const card = document.createElement('div');
+      card.className = 'usage-card';
+      card.innerHTML = `
+        <div class="usage-card-label">${label}</div>
+        <div class="usage-card-value">${formatTokens(s.totalTokens)}</div>
+        <div class="usage-card-sub">${formatCost(s.cost)}</div>`;
+      cards.appendChild(card);
+    });
+
+    if (data.monthlyBudgetUSD) {
+      $('#usage-budget-row').classList.remove('hidden');
+      const spend = data.monthSpend || 0;
+      const pct = Math.min(100, (spend / data.monthlyBudgetUSD) * 100);
+      $('#usage-budget-label').textContent = `本月预算 · 已用 ${formatCost(spend)} / ${formatCost(data.monthlyBudgetUSD)}（${pct.toFixed(0)}%）`;
+      const fill = $('#usage-budget-fill');
+      fill.style.width = pct + '%';
+      fill.classList.toggle('over', spend > data.monthlyBudgetUSD);
+    } else {
+      $('#usage-budget-row').classList.add('hidden');
+    }
+
+    renderHeatmap(data.dailySeries);
+    renderTrendChart(data.trend90);
+
+    const modelBody = $('#usage-model-body');
+    modelBody.innerHTML = '';
+    data.byModel.forEach((m) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${m.model}</td>
+        <td>${formatTokens(m.inputTokens)}</td>
+        <td>${formatTokens(m.outputTokens)}</td>
+        <td>${formatTokens(m.totalTokens)}</td>
+        <td>${formatCost(m.cost)}</td>
+        <td>${m.requests}</td>`;
+      modelBody.appendChild(tr);
+    });
+    $('#usage-pricing-gap-hint').classList.toggle('hidden', !data.hasPricingGaps);
+  }
+
+  function renderHeatmap(series) {
+    const el = $('#usage-heatmap');
+    el.innerHTML = '';
+    const max = Math.max(1, ...series.map((d) => d.tokens));
+    series.forEach((d) => {
+      const cell = document.createElement('div');
+      cell.className = 'heat-cell';
+      const ratio = d.tokens / max;
+      const level = d.tokens === 0 ? 0 : ratio > 0.75 ? 4 : ratio > 0.45 ? 3 : ratio > 0.15 ? 2 : 1;
+      cell.dataset.level = String(level);
+      cell.title = `${d.date} · ${formatTokens(d.tokens)} tokens`;
+      el.appendChild(cell);
+    });
+  }
+
+  function renderTrendChart(trend) {
+    if (!window.Chart) return;
+    const canvas = $('#usage-trend-chart');
+    if (usageChart) { usageChart.destroy(); usageChart = null; }
+    usageChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: trend.map((d) => d.date.slice(5)),
+        datasets: [{
+          data: trend.map((d) => d.tokens),
+          borderColor: '#cc785c',
+          backgroundColor: 'rgba(204,120,92,0.12)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#726e69', maxTicksLimit: 8 }, grid: { display: false } },
+          y: { ticks: { color: '#726e69', callback: (v) => formatTokens(v) }, grid: { color: '#3a3836' } }
+        }
+      }
+    });
+  }
 
   // ---------------- boot ----------------
 

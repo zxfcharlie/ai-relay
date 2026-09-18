@@ -11,15 +11,27 @@ const DEFAULT_DB = {
   users: [],
   conversations: [],
   messages: [],
+  usage: [], // token/cost accounting — see services/usage.js
   settings: {
     globalOpenAIKey: '',
     globalClaudeKey: '',
     allowRegistration: true,
+    // New signups sit as 'pending' until an admin approves them, rather
+    // than being usable immediately.
+    requireApproval: true,
     siteName: 'Relay',
     // How long an uploaded chat image stays available for re-viewing /
     // download before it's purged. 0 = delete right after the model has
     // used it (no later preview/download, minimum server footprint).
-    imageRetentionDays: 3
+    imageRetentionDays: 3,
+    // $ per 1M tokens per model, admin-entered (e.g. { "gpt-5.1": { inputPer1M: 1.25, outputPer1M: 10 } }).
+    // Deliberately ships empty rather than with baked-in numbers — provider
+    // pricing changes often enough that a hardcoded table would go stale
+    // and misreport real cost.
+    pricing: {},
+    // Optional team-wide monthly spend target shown as a progress bar on
+    // the usage dashboard. null/0 = not tracked.
+    monthlyBudgetUSD: null
   }
 };
 

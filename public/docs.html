@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relay API 文档</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+  body { display: block; }
+  .docs-wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px 100px;
+  }
+  .docs-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 6px;
+  }
+  .docs-header h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 28px;
+    margin: 0;
+  }
+  .docs-back { font-size: 13px; color: var(--text-dim); text-decoration: none; }
+  .docs-back:hover { color: var(--text); }
+  .docs-intro { color: var(--text-dim); margin: 4px 0 30px; line-height: 1.7; }
+
+  .docs-toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 40px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .docs-toc a {
+    font-size: 12.5px;
+    color: var(--text-dim);
+    text-decoration: none;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    padding: 5px 11px;
+    border-radius: 999px;
+  }
+  .docs-toc a:hover { color: var(--text); border-color: var(--accent); }
+
+  .docs-section { margin-bottom: 52px; scroll-margin-top: 20px; }
+  .docs-section h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 21px;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .method-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 5px;
+    letter-spacing: .02em;
+  }
+  .method-get { background: #1f3a2e; color: #6fcf97; }
+  .method-post { background: #2e2a1f; color: #d9b96f; }
+
+  .docs-section p { color: var(--text-dim); line-height: 1.75; }
+  .docs-section p code, .docs-section li code {
+    background: var(--bg-sunken);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+
+  .param-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  .param-table th, .param-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .param-table th { color: var(--text-dim); font-weight: 400; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  .param-table td:first-child { font-family: 'SF Mono', Consolas, monospace; color: var(--accent); white-space: nowrap; }
+  .param-table .opt { color: var(--text-faint); font-size: 11px; }
+
+  .code-tabs { display: flex; gap: 4px; margin: 16px 0 0; }
+  .code-tab-btn {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer;
+  }
+  .code-tab-btn.active { color: var(--text); background: var(--bg-sunken); }
+  .code-panel { display: none; margin: 0; }
+  .code-panel.active { display: block; }
+  .code-panel pre {
+    margin: 0;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: 0 8px 8px 8px;
+    padding: 14px;
+    overflow-x: auto;
+    font-size: 12.5px;
+  }
+  .code-panel code { font-family: 'SF Mono', Consolas, monospace; }
+
+  .note {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: 10px 14px;
+    border-radius: 0 8px 8px 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    margin: 14px 0;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="docs-wrap">
+  <div class="docs-header">
+    <h1>✳️ Relay API 文档</h1>
+    <a class="docs-back" href="/">← 返回应用</a>
+  </div>
+  <p class="docs-intro">
+    这台服务对外提供一个 OpenAI 兼容的中转接口：用你自己的中转密钥代替真实的 OpenAI / Claude 密钥，
+    任何支持自定义 <code>base_url</code> 的 OpenAI SDK 或第三方工具都可以直接指向这里。
+    密钥在「设置 → 中转访问」里可以查看和重新生成。
+  </p>
+
+  <div class="docs-toc">
+    <a href="#auth">鉴权</a>
+    <a href="#base-url">Base URL</a>
+    <a href="#models">GET /v1/models</a>
+    <a href="#chat">POST /v1/chat/completions</a>
+    <a href="#images-gen">POST /v1/images/generations</a>
+    <a href="#images-edit">POST /v1/images/edits</a>
+    <a href="#errors">错误格式</a>
+  </div>
+
+  <section class="docs-section" id="auth">
+    <h2>鉴权</h2>
+    <p>所有 <code>/v1/*</code> 接口都需要在请求头里带上你的中转密钥：</p>
+    <div class="code-panel active" style="display:block;">
+      <pre><code class="hljs">Authorization: Bearer rk-你的中转密钥</code></pre>
+    </div>
+    <p>密钥缺失或错误会返回 <code>401</code>。这个密钥和你的登录密码无关，是每个账号独立生成、可随时重置的，重置后旧密钥立即失效。</p>
+  </section>
+
+  <section class="docs-section" id="base-url">
+    <h2>Base URL</h2>
+    <div class="copy-row"><code id="base-url-val">/v1</code><button class="btn btn-ghost" id="copy-base-url">复制</button></div>
+    <p>下面示例里的 <code>&lt;base_url&gt;</code> 都指这个地址。</p>
+  </section>
+
+  <section class="docs-section" id="models">
+    <h2><span class="method-pill method-get">GET</span> /v1/models</h2>
+    <p>
+      返回当前账号（根据配置的密钥）在 OpenAI / Claude 上实时可用的全部模型，除标准的 OpenAI 模型字段外，
+      额外带了三个自定义字段，方便你自己的客户端也做分类和搜索：
+    </p>
+    <table class="param-table">
+      <thead><tr><th>字段</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>id</td><td>模型 ID，直接用于其他接口的 <code>model</code> 参数</td></tr>
+        <tr><td>owned_by</td><td><code>openai</code> 或 <code>claude</code></td></tr>
+        <tr><td>category</td><td><code>chat</code>（对话/视觉）或 <code>image</code>（图像生成）</td></tr>
+        <tr><td>tier</td><td><code>flagship</code> / <code>reasoning</code> / <code>fast</code> / <code>balanced</code> / <code>image</code></td></tr>
+        <tr><td>description</td><td>一句中文简介</td></tr>
+      </tbody>
+    </table>
+    <div class="code-tabs">
+      <button class="code-tab-btn active" data-tab="models-curl">curl</button>
+    </div>
+    <div class="code-panel active" data-tab="models-curl">
+      <pre><code class="hljs language-bash">curl &lt;base_url&gt;/models \
+  -H "Authorization: Bearer rk-你的中转密钥"</code></pre>
+    </div>
+  </section>
+
+  <section class="docs-section" id="chat">
+    <h2><span class="method-pill method-post">POST</span> /v1/chat/completions</h2>
+    <p>对话接口，OpenAI 请求/响应格式进出，实际按 <code>model</code> 自动路由到 OpenAI 或 Claude，流式响应也统一是 OpenAI 的 SSE 格式。</p>
+    <table class="param-table">
+      <thead><tr><th>字段</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>model</td><td>必填，模型 ID</td></tr>
+        <tr><td>messages</td><td>必填，标准 OpenAI 消息数组；<code>content</code> 支持字符串，或 <code>[{type:"text",...}, {type:"image_url",image_url:{url:"data:..."}}]</code> 这种视觉格式（会按目标模型自动转换成对应厂商需要的格式）</td></tr>
+        <tr><td>stream</td><td class="opt">选填，布尔，默认 false</td></tr>
+        <tr><td>provider</td><td class="opt">选填，<code>"openai"</code> 或 <code>"claude"</code>，显式覆盖按模型名自动判断的路由（用于自定义/微调模型名场景）</td></tr>
+      </tbody>
+    </table>
+    <div class="note">未识别的模型名如果没有显式传 <code>provider</code>，会返回 400。<code>temperature</code>/<code>max_tokens</code> 等采样参数目前不会透传给上游，统一使用各模型的默认值。非流式响应里的 <code>usage</code> 字段是占位的 0，不代表真实 token 消耗。</div>
+    <div class="code-tabs">
+      <button class="code-tab-btn active" data-tab="chat-curl">curl</button>
+      <button class="code-tab-btn" data-tab="chat-py">Python (OpenAI SDK)</button>
+      <button class="code-tab-btn" data-tab="chat-node">Node.js (OpenAI SDK)</button>
+    </div>
+    <div class="code-panel active" data-tab="chat-curl">
+      <pre><code class="hljs language-bash">curl &lt;base_url&gt;/chat/completions \
+  -H "Authorization: Bearer rk-你的中转密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": false
+      }'</code></pre>
+    </div>
+    <div class="code-panel" data-tab="chat-py">
+      <pre><code class="hljs language-python">from openai import OpenAI
+
+client = OpenAI(base_url="&lt;base_url&gt;", api_key="rk-你的中转密钥")
+
+resp = client.chat.completions.create(
+    model="gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    stream=True,
+)
+for chunk in resp:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")</code></pre>
+    </div>
+    <div class="code-panel" data-tab="chat-node">
+      <pre><code class="hljs language-javascript">import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "&lt;base_url&gt;", apiKey: "rk-你的中转密钥" });
+
+const stream = await client.chat.completions.create({
+  model: "claude-sonnet-4-6",
+  messages: [{ role: "user", content: "Hello" }],
+  stream: true,
+});
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content || "");
+}</code></pre>
+    </div>
+  </section>
+
+  <section class="docs-section" id="images-gen">
+    <h2><span class="method-pill method-post">POST</span> /v1/images/generations</h2>
+    <p>文生图，对应官方 SDK 的 <code>client.images.generate()</code>。只支持 OpenAI 的 <code>gpt-image-*</code> 系列（Claude 没有生图接口）。</p>
+    <table class="param-table">
+      <thead><tr><th>字段</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>model</td><td>必填，例如 <code>gpt-image-2</code></td></tr>
+        <tr><td>prompt</td><td>必填，图片描述</td></tr>
+        <tr><td>size</td><td class="opt">选填，<code>"auto"</code> 或 <code>"宽x高"</code>（如 <code>"1024x1024"</code>）；<code>gpt-image-2</code> 及更新的模型支持任意分辨率</td></tr>
+        <tr><td>quality</td><td class="opt">选填，<code>auto</code> / <code>low</code> / <code>medium</code> / <code>high</code> / <code>xhigh</code> / <code>max</code> —— <strong>影响费用最主要的参数</strong></td></tr>
+        <tr><td>n</td><td class="opt">选填，生成数量，1–10，默认 1</td></tr>
+        <tr><td>output_format</td><td class="opt">选填，<code>png</code> / <code>jpeg</code> / <code>webp</code>，默认 png</td></tr>
+        <tr><td>background</td><td class="opt">选填，<code>auto</code> / <code>opaque</code> / <code>transparent</code></td></tr>
+      </tbody>
+    </table>
+    <div class="note">响应始终是 <code>{"data": [{"b64_json": "..."}]}</code>——GPT Image 系列不接受 <code>response_format</code>，传了会被 OpenAI 直接拒绝，所以这里也不支持传这个字段，固定返回 base64。</div>
+    <div class="code-tabs">
+      <button class="code-tab-btn active" data-tab="imggen-curl">curl</button>
+      <button class="code-tab-btn" data-tab="imggen-py">Python (OpenAI SDK)</button>
+    </div>
+    <div class="code-panel active" data-tab="imggen-curl">
+      <pre><code class="hljs language-bash">curl &lt;base_url&gt;/images/generations \
+  -H "Authorization: Bearer rk-你的中转密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "gpt-image-2",
+        "prompt": "一只戴墨镜的柴犬，插画风格",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1
+      }'</code></pre>
+    </div>
+    <div class="code-panel" data-tab="imggen-py">
+      <pre><code class="hljs language-python">from openai import OpenAI
+import base64
+
+client = OpenAI(base_url="&lt;base_url&gt;", api_key="rk-你的中转密钥")
+
+resp = client.images.generate(
+    model="gpt-image-2",
+    prompt="一只戴墨镜的柴犬，插画风格",
+    size="1024x1024",
+    quality="low",
+)
+with open("out.png", "wb") as f:
+    f.write(base64.b64decode(resp.data[0].b64_json))</code></pre>
+    </div>
+  </section>
+
+  <section class="docs-section" id="images-edit">
+    <h2><span class="method-pill method-post">POST</span> /v1/images/edits</h2>
+    <p>图片编辑（改色、换背景、合成参考图等），对应官方 SDK 的 <code>client.images.edit()</code>。<code>multipart/form-data</code> 请求。</p>
+    <table class="param-table">
+      <thead><tr><th>字段</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>model</td><td>必填</td></tr>
+        <tr><td>prompt</td><td>必填，编辑指令</td></tr>
+        <tr><td>image / image[]</td><td>必填，一张用 <code>image</code>，多张参考图重复使用 <code>image[]</code> 字段（最多 16 张）</td></tr>
+        <tr><td>size / quality / n / output_format / background</td><td class="opt">选填，同 <code>/images/generations</code></td></tr>
+      </tbody>
+    </table>
+    <div class="code-tabs">
+      <button class="code-tab-btn active" data-tab="imgedit-curl">curl</button>
+      <button class="code-tab-btn" data-tab="imgedit-py">Python (OpenAI SDK)</button>
+    </div>
+    <div class="code-panel active" data-tab="imgedit-curl">
+      <pre><code class="hljs language-bash">curl &lt;base_url&gt;/images/edits \
+  -H "Authorization: Bearer rk-你的中转密钥" \
+  -F "model=gpt-image-2" \
+  -F "prompt=把包的颜色改成黑色" \
+  -F "quality=medium" \
+  -F "image[]=@bag.png"</code></pre>
+    </div>
+    <div class="code-panel" data-tab="imgedit-py">
+      <pre><code class="hljs language-python">from openai import OpenAI
+import base64
+
+client = OpenAI(base_url="&lt;base_url&gt;", api_key="rk-你的中转密钥")
+
+resp = client.images.edit(
+    model="gpt-image-2",
+    prompt="把包的颜色改成黑色",
+    image=open("bag.png", "rb"),
+    quality="medium",
+)
+with open("out.png", "wb") as f:
+    f.write(base64.b64decode(resp.data[0].b64_json))</code></pre>
+    </div>
+  </section>
+
+  <section class="docs-section" id="errors">
+    <h2>错误格式</h2>
+    <p>失败时统一返回：</p>
+    <pre style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:8px;padding:14px;"><code class="hljs language-json">{
+  "error": {
+    "message": "具体错误信息",
+    "type": "invalid_request_error"
+  }
+}</code></pre>
+    <table class="param-table">
+      <thead><tr><th>type</th><th>对应场景</th></tr></thead>
+      <tbody>
+        <tr><td>authentication_error</td><td>中转密钥缺失或不正确（401）</td></tr>
+        <tr><td>invalid_request_error</td><td>请求缺字段、模型无法识别、没配置对应服务商密钥等（400）</td></tr>
+        <tr><td>api_error</td><td>上游 OpenAI / Claude 调用失败，message 里是上游返回的原始错误（502）</td></tr>
+      </tbody>
+    </table>
+    <p>流式响应里的错误会作为最后一个 <code>data:</code> 事件发出（同样是上面这个结构），随后紧跟 <code>data: [DONE]</code>。</p>
+  </section>
+</div>
+
+<script>
+  document.getElementById('base-url-val').textContent = location.origin + '/v1';
+  document.querySelectorAll('pre code').forEach((el) => {
+    el.innerHTML = el.innerHTML.replace(/&lt;base_url&gt;/g, location.origin + '/v1');
+  });
+  if (window.hljs) document.querySelectorAll('pre code').forEach((el) => hljs.highlightElement(el));
+
+  document.getElementById('copy-base-url').addEventListener('click', () => {
+    navigator.clipboard.writeText(location.origin + '/v1');
+  });
+
+  document.querySelectorAll('.code-tabs').forEach((tabs) => {
+    tabs.addEventListener('click', (e) => {
+      const btn = e.target.closest('.code-tab-btn');
+      if (!btn) return;
+      const group = tabs.parentElement;
+      const tab = btn.dataset.tab;
+      group.querySelectorAll('.code-tab-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      group.querySelectorAll('.code-panel').forEach((p) => p.classList.toggle('active', p.dataset.tab === tab));
+    });
+  });
+</script>
+
+</body>
+</html>

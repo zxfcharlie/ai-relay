@@ -37,6 +37,11 @@ function requireAuth(req, res, next) {
     const db = getDB();
     const user = db.users.find((u) => u.id === payload.uid);
     if (!user) return res.status(401).json({ error: 'Not signed in.' });
+    // Covers an existing session for an account an admin later suspends —
+    // access is revoked on the next request, not just at the next login.
+    if (user.status !== 'active') {
+      return res.status(403).json({ error: '账号正在等待管理员审核。', pending: true });
+    }
     req.user = user;
     next();
   } catch (e) {
@@ -56,6 +61,7 @@ function publicUser(u) {
     id: u.id,
     username: u.username,
     isAdmin: u.isAdmin,
+    status: u.status,
     createdAt: u.createdAt,
     hasPersonalOpenAIKey: !!u.personalOpenAIKey,
     hasPersonalClaudeKey: !!u.personalClaudeKey,

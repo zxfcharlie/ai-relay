@@ -10,6 +10,7 @@ const settingsRoutes = require('./routes/settings');
 const chatRoutes = require('./routes/chat');
 const relayRoutes = require('./routes/relay');
 const imagesRoutes = require('./routes/images');
+const usageRoutes = require('./routes/usage');
 const { startCleanupSchedule } = require('./services/cleanup');
 
 const PORT = process.env.PORT || 8511;
@@ -22,11 +23,19 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/images', imagesRoutes);
+app.use('/api/usage', usageRoutes);
 app.use('/api', chatRoutes);
 
 // Remote relay API (Bearer relay-key authenticated, OpenAI-compatible,
 // for use from other machines / other apps)
 app.use('/v1', relayRoutes);
+
+// Standalone API documentation for the relay endpoints (served explicitly,
+// since a bare "/docs" would otherwise fall through to the SPA catch-all
+// below rather than resolving docs.html the way "/docs.html" would).
+app.get('/docs', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'docs.html'));
+});
 
 // Static frontend
 app.use(express.static(path.join(__dirname, '..', 'public')));

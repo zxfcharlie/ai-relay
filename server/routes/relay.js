@@ -7,6 +7,13 @@ const { resolveApiKey } = require('../services/keys');
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 16 } });
 
+// OpenAI's own error responses always carry a "type" alongside "message" —
+// matching that shape means strict SDK error handlers (which sometimes
+// branch on err.type) work against this relay too.
+function errJson(message, type) {
+  return { error: { message, type: type || 'invalid_request_error' } };
+}
+
 // CORS is safe to open wide here: auth is a bearer relay key in the header,
 // never a cookie, so there is no ambient-credential risk in allowing any
 // origin to call this from a browser-based tool too.
@@ -25,10 +32,11 @@ router.use((req, res, next) => {
 function relayAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const key = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
-  if (!key) return res.status(401).json({ error: { message: 'Missing Authorization: Bearer <relay key>.' } });
+  if (!key) return res.status(401).json(errJson('Missing Authorization: Bearer <relay key>.', 'authentication_error'));
   const db = getDB();
   const user = db.users.find((u) => u.relayApiKey === key);
-  if (!user) return res.status(401).json({ error: { message: 'Invalid relay API key.' } });
+  if (!user) return res.status(401).json(errJson('Invalid relay API key.', 'authentication_error'));
+  if (user.status !== 'active') return res.status(403).json(errJson('This account is pending approval or has been suspended.', 'authentication_error'));
   req.relayUser = user;
   next();
 }
@@ -47,6 +55,7 @@ router.get('/models', relayAuth, async (req, res) => {
   const data = [...openaiModels, ...claudeModels].map((m) => ({
     id: m.id,
     object: 'model',
+    created: Math.floor(Date.now() / 1000),
     owned_by: m.provider,
     category: m.category,
     tier: m.tier,
@@ -64,21 +73,17 @@ router.get('/models', relayAuth, async (req, res) => {
 router.post('/chat/completions', relayAuth, async (req, res) => {
   const { model, messages, stream, provider: providerOverride } = req.body || {};
   if (!model || !Array.isArray(messages)) {
-    return res.status(400).json({ error: { message: 'Request must include "model" and "messages".' } });
+    return res.status(400).json(errJson('Request must include "model" and "messages".'));
   }
   const provider = (providerOverride === 'openai' || providerOverride === 'claude')
     ? providerOverride
     : providerForModel(model);
   if (!provider) {
-    return res.status(400).json({
-      error: { message: `Unrecognized model "${model}". Pass an explicit "provider": "openai" | "claude" to override.` }
-    });
+    return res.status(400).json(errJson(`Unrecognized model "${model}". Pass an explicit "provider": "openai" | "claude" to override.`));
   }
   const apiKey = resolveApiKey(req.relayUser, provider);
   if (!apiKey) {
-    return res.status(400).json({
-      error: { message: `No ${provider === 'openai' ? 'OpenAI' : 'Claude'} API key is configured for this account.` }
-    });
+    return res.status(400).json(errJson(`No ${provider === 'openai' ? 'OpenAI' : 'Claude'} API key is configured for this account.`));
   }
 
   const created = Math.floor(Date.now() / 1000);
@@ -117,7 +122,7 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
       res.write('data: [DONE]\n\n');
       res.end();
     } catch (err) {
-      res.write(`data: ${JSON.stringify({ error: { message: err.message } })}\n\n`);
+      res.write(`data: ${JSON.stringify(errJson(err.message, 'api_error'))}\n\n`);
       res.write('data: [DONE]\n\n');
       res.end();
     }
@@ -140,7 +145,7 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
     });
   } catch (err) {
-    res.status(502).json({ error: { message: err.message } });
+    res.status(502).json(errJson(err.message, 'api_error'));
   }
 });
 
@@ -152,11 +157,11 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
 router.post('/images/generations', relayAuth, async (req, res) => {
   const { model, prompt, size, quality, background, output_format: outputFormat, n } = req.body || {};
   if (!model || !prompt) {
-    return res.status(400).json({ error: { message: 'Request must include "model" and "prompt".' } });
+    return res.status(400).json(errJson('Request must include "model" and "prompt".'));
   }
   const apiKey = resolveApiKey(req.relayUser, 'openai');
   if (!apiKey) {
-    return res.status(400).json({ error: { message: 'No OpenAI API key is configured for this account.' } });
+    return res.status(400).json(errJson('No OpenAI API key is configured for this account.'));
   }
   try {
     const images = await generateOrEditImage(apiKey, model, prompt, [], { size, quality, background, outputFormat, n });
@@ -165,7 +170,7 @@ router.post('/images/generations', relayAuth, async (req, res) => {
       data: images.map((img) => ({ b64_json: img.data }))
     });
   } catch (err) {
-    res.status(502).json({ error: { message: err.message } });
+    res.status(502).json(errJson(err.message, 'api_error'));
   }
 });
 
@@ -177,14 +182,14 @@ router.post('/images/edits', relayAuth, upload.fields([{ name: 'image' }, { name
   const { model, prompt, size, quality, background, output_format: outputFormat, n } = req.body || {};
   const files = [...((req.files && req.files.image) || []), ...((req.files && req.files['image[]']) || [])];
   if (!model || !prompt) {
-    return res.status(400).json({ error: { message: 'Request must include "model" and "prompt".' } });
+    return res.status(400).json(errJson('Request must include "model" and "prompt".'));
   }
   if (!files.length) {
-    return res.status(400).json({ error: { message: 'Request must include at least one "image" file.' } });
+    return res.status(400).json(errJson('Request must include at least one "image" file.'));
   }
   const apiKey = resolveApiKey(req.relayUser, 'openai');
   if (!apiKey) {
-    return res.status(400).json({ error: { message: 'No OpenAI API key is configured for this account.' } });
+    return res.status(400).json(errJson('No OpenAI API key is configured for this account.'));
   }
   try {
     const refImages = files.map((f) => ({ mediaType: f.mimetype || 'image/png', data: f.buffer.toString('base64') }));
@@ -194,7 +199,7 @@ router.post('/images/edits', relayAuth, upload.fields([{ name: 'image' }, { name
       data: images.map((img) => ({ b64_json: img.data }))
     });
   } catch (err) {
-    res.status(502).json({ error: { message: err.message } });
+    res.status(502).json(errJson(err.message, 'api_error'));
   }
 });
 

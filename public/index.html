@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -32,12 +33,20 @@
         <input id="auth-password" type="password" autocomplete="current-password" required>
       </div>
       <button type="submit" class="btn btn-primary btn-block" id="auth-submit">登录</button>
+      <div id="auth-approval-hint" class="field-hint hidden" style="text-align:center; margin-top:12px;">注册后需要等待管理员审核通过才能登录。</div>
     </form>
 
     <div class="auth-switch">
       <span id="auth-switch-text">还没有账号？</span>
       <button type="button" id="auth-switch-btn">立即注册</button>
     </div>
+  </div>
+
+  <div class="auth-card hidden" id="auth-pending-view">
+    <div class="auth-mark">⏳</div>
+    <h1>注册成功</h1>
+    <p class="auth-sub">账号正在等待管理员审核，通过后即可登录，请稍后再来试试。</p>
+    <button type="button" class="btn btn-block" id="auth-pending-back">返回登录</button>
   </div>
 </div>
 
@@ -46,6 +55,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">✳️ <span id="brand-name">Relay</span></div>
     <button class="new-chat-btn" id="new-chat-btn">＋ 新对话</button>
+    <button class="new-chat-btn" id="usage-dashboard-btn">📊 用量统计</button>
     <div class="convo-list" id="convo-list"></div>
     <div class="sidebar-footer">
       <button class="user-menu-btn" id="user-menu-btn">
@@ -245,22 +255,81 @@
         </label>
       </div>
 
+      <div class="toggle-row">
+        <div>
+          <div>注册需人工审核</div>
+          <div class="field-hint" style="margin-top:2px;">开启后新注册账号会停留在"待审核"状态，需要管理员在下方用户列表里通过后才能登录。</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="admin-require-approval">
+          <span class="switch-track"></span>
+        </label>
+      </div>
+
       <div class="field" style="margin-top:14px;">
         <label>图片自动清理（天）</label>
         <input id="admin-image-retention" type="number" min="0" step="1" style="max-width:120px;">
         <div class="field-hint">聊天中上传的图片只是临时保存用于预览/下载，超过这个天数会被自动删除（文字记录不受影响）。填 0 表示模型用完后立即删除，不再支持后续预览下载。</div>
       </div>
 
+      <div class="field">
+        <label>本月预算提醒（美元，选填）</label>
+        <input id="admin-monthly-budget" type="number" min="0" step="1" placeholder="不填则不显示预算进度" style="max-width:160px;">
+        <div class="field-hint">用量统计面板里会显示当月已用费用相对这个预算的进度，纯提醒用途，不会真的限制调用。费用计算依赖下面的模型价格设置。</div>
+      </div>
+
       <div class="save-row">
         <button class="btn btn-primary" id="save-admin-btn">保存设置</button>
       </div>
 
+      <div class="section-title">模型价格（每百万 token 美元，用于用量统计里估算费用）</div>
+      <div class="field-hint" style="margin-bottom:10px;">价格不会自动获取——官方价格调整比较频繁，这里都是手动填写，未填的模型不计入费用统计（仍会统计 token 数）。</div>
+      <div id="admin-pricing-list"></div>
+      <div class="save-row">
+        <button class="btn btn-primary" id="save-pricing-btn">保存价格</button>
+      </div>
+
       <div class="section-title">用户</div>
       <table class="user-table">
-        <thead><tr><th>用户名</th><th>角色</th><th>中转密钥</th><th></th></tr></thead>
+        <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>中转密钥</th><th></th></tr></thead>
         <tbody id="admin-users-body"></tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<!-- ===================== USAGE DASHBOARD MODAL ===================== -->
+<div class="modal-backdrop hidden" id="usage-modal">
+  <div class="modal" style="max-width:760px;">
+    <button class="modal-close" id="usage-close">✕</button>
+    <h2>用量统计</h2>
+
+    <div class="usage-toolbar">
+      <div class="usage-scope hidden" id="usage-scope-toggle">
+        <button class="usage-scope-btn active" data-scope="self">我的</button>
+        <button class="usage-scope-btn" data-scope="all">全部用户</button>
+      </div>
+    </div>
+
+    <div id="usage-budget-row" class="hidden">
+      <div class="opt-row" style="padding:0 0 6px;"><label id="usage-budget-label"></label></div>
+      <div class="budget-bar"><div class="budget-bar-fill" id="usage-budget-fill"></div></div>
+    </div>
+
+    <div class="usage-cards" id="usage-cards"></div>
+
+    <div class="section-title">最近 6 个月</div>
+    <div id="usage-heatmap" class="usage-heatmap"></div>
+
+    <div class="section-title">最近 90 天 token 趋势</div>
+    <div class="usage-chart-wrap"><canvas id="usage-trend-chart" height="160"></canvas></div>
+
+    <div class="section-title">按模型</div>
+    <table class="user-table" id="usage-model-table">
+      <thead><tr><th>模型</th><th>输入</th><th>输出</th><th>合计</th><th>费用</th><th>次数</th></tr></thead>
+      <tbody id="usage-model-body"></tbody>
+    </table>
+    <div class="field-hint hidden" id="usage-pricing-gap-hint">部分模型还没设置价格，对应的费用没有计入统计（token 数仍准确），可以在设置 → 管理员里补充价格。</div>
   </div>
 </div>
 
