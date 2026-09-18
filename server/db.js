@@ -31,7 +31,12 @@ const DEFAULT_DB = {
     pricing: {},
     // Optional team-wide monthly spend target shown as a progress bar on
     // the usage dashboard. null/0 = not tracked.
-    monthlyBudgetUSD: null
+    monthlyBudgetUSD: null,
+    // Admin-added third-party model providers (e.g. an OpenAI-compatible
+    // aggregator) — each gets its own slug used as the `provider` value on
+    // conversations/messages, alongside the built-in 'openai' and 'claude'.
+    // [{ id, slug, label, type: 'openai-compatible'|'anthropic-compatible', baseURL, apiKey, enabled }]
+    customProviders: []
   }
 };
 

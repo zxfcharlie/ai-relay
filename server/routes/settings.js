@@ -43,7 +43,13 @@ router.get('/admin', requireAuth, requireAdmin, (req, res) => {
       siteName: db.settings.siteName,
       imageRetentionDays: db.settings.imageRetentionDays,
       monthlyBudgetUSD: db.settings.monthlyBudgetUSD,
-      pricing: db.settings.pricing || {}
+      pricing: db.settings.pricing || {},
+      // Never send the raw key back to the browser once it's saved — only
+      // whether one is set, same treatment as the built-in global keys.
+      customProviders: (db.settings.customProviders || []).map((p) => ({
+        id: p.id, slug: p.slug, label: p.label, type: p.type, baseURL: p.baseURL,
+        enabled: p.enabled, hasApiKey: !!p.apiKey
+      }))
     },
     users: db.users.map(publicUser)
   });
@@ -90,6 +96,65 @@ router.put('/admin/pricing', requireAuth, requireAdmin, (req, res) => {
   db.settings.pricing = clean;
   save();
   res.json({ pricing: clean });
+});
+
+// ---- admin: custom (third-party) providers ----
+
+const SLUG_RE = /^[a-z][a-z0-9-]{1,30}$/;
+
+router.post('/admin/providers', requireAuth, requireAdmin, (req, res) => {
+  const { slug, label, type, baseURL, apiKey } = req.body || {};
+  if (!slug || !SLUG_RE.test(slug)) {
+    return res.status(400).json({ error: '标识需为小写字母开头、仅含小写字母/数字/连字符（如 toapis）。' });
+  }
+  if (slug === 'openai' || slug === 'claude') {
+    return res.status(400).json({ error: '"openai" 和 "claude" 是内置标识，不能重复使用。' });
+  }
+  if (!label || !label.trim()) return res.status(400).json({ error: 'label is required.' });
+  if (type !== 'openai-compatible' && type !== 'anthropic-compatible') {
+    return res.status(400).json({ error: 'type must be "openai-compatible" or "anthropic-compatible".' });
+  }
+  if (!baseURL || !/^https?:\/\//.test(baseURL)) {
+    return res.status(400).json({ error: 'baseURL must be a full http(s) URL.' });
+  }
+  const db = getDB();
+  db.settings.customProviders = db.settings.customProviders || [];
+  if (db.settings.customProviders.some((p) => p.slug === slug)) {
+    return res.status(409).json({ error: `标识 "${slug}" 已经被使用。` });
+  }
+  const provider = {
+    id: nanoid(),
+    slug,
+    label: label.trim(),
+    type,
+    baseURL: baseURL.trim().replace(/\/$/, ''),
+    apiKey: (apiKey || '').trim(),
+    enabled: true
+  };
+  db.settings.customProviders.push(provider);
+  save();
+  res.json({ provider: { ...provider, apiKey: undefined, hasApiKey: !!provider.apiKey } });
+});
+
+router.put('/admin/providers/:id', requireAuth, requireAdmin, (req, res) => {
+  const { label, baseURL, apiKey, enabled } = req.body || {};
+  const db = getDB();
+  const provider = (db.settings.customProviders || []).find((p) => p.id === req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found.' });
+  if (typeof label === 'string' && label.trim()) provider.label = label.trim();
+  if (typeof baseURL === 'string' && /^https?:\/\//.test(baseURL)) provider.baseURL = baseURL.trim().replace(/\/$/, '');
+  if (typeof apiKey === 'string' && apiKey.trim()) provider.apiKey = apiKey.trim();
+  if (typeof enabled === 'boolean') provider.enabled = enabled;
+  save();
+  res.json({ provider: { ...provider, apiKey: undefined, hasApiKey: !!provider.apiKey } });
+});
+
+router.delete('/admin/providers/:id', requireAuth, requireAdmin, (req, res) => {
+  const db = getDB();
+  const before = (db.settings.customProviders || []).length;
+  db.settings.customProviders = (db.settings.customProviders || []).filter((p) => p.id !== req.params.id);
+  save();
+  res.json({ removed: before - db.settings.customProviders.length });
 });
 
 router.delete('/admin/users/:id', requireAuth, requireAdmin, (req, res) => {

@@ -207,7 +207,7 @@
         <tr><td>model</td><td>必填，模型 ID</td></tr>
         <tr><td>messages</td><td>必填，标准 OpenAI 消息数组；<code>content</code> 支持字符串，或 <code>[{type:"text",...}, {type:"image_url",image_url:{url:"data:..."}}]</code> 这种视觉格式（会按目标模型自动转换成对应厂商需要的格式）</td></tr>
         <tr><td>stream</td><td class="opt">选填，布尔，默认 false</td></tr>
-        <tr><td>provider</td><td class="opt">选填，<code>"openai"</code> 或 <code>"claude"</code>，显式覆盖按模型名自动判断的路由（用于自定义/微调模型名场景）</td></tr>
+        <tr><td>provider</td><td class="opt">选填，<code>"openai"</code> / <code>"claude"</code> / 管理员在后台加的第三方服务商标识，显式覆盖按模型名自动判断的路由（第三方模型名一般猜不出来源，建议总是显式传）</td></tr>
       </tbody>
     </table>
     <div class="note">未识别的模型名如果没有显式传 <code>provider</code>，会返回 400。<code>temperature</code>/<code>max_tokens</code> 等采样参数目前不会透传给上游，统一使用各模型的默认值。非流式响应里的 <code>usage</code> 字段是占位的 0，不代表真实 token 消耗。</div>

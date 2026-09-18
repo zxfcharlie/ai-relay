@@ -1,7 +1,11 @@
 const express = require('express');
 const multer = require('multer');
 const { getDB } = require('../db');
-const { streamChat, providerForModel, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage } = require('../services/providers');
+const {
+  streamChat, providerForModel, resolveProvider,
+  fetchOpenAIModels, fetchClaudeModels, fetchCustomProviderModels,
+  generateOrEditImage
+} = require('../services/providers');
 const { resolveApiKey } = require('../services/keys');
 
 const router = express.Router();
@@ -42,17 +46,20 @@ function relayAuth(req, res, next) {
 }
 
 router.get('/models', relayAuth, async (req, res) => {
+  const db = getDB();
   const openaiKey = resolveApiKey(req.relayUser, 'openai');
   const claudeKey = resolveApiKey(req.relayUser, 'claude');
-  const [openaiModels, claudeModels] = await Promise.all([
+  const customProviders = (db.settings.customProviders || []).filter((p) => p.enabled && p.apiKey);
+  const [openaiModels, claudeModels, ...customResults] = await Promise.all([
     openaiKey ? fetchOpenAIModels(openaiKey).catch(() => []) : [],
-    claudeKey ? fetchClaudeModels(claudeKey).catch(() => []) : []
+    claudeKey ? fetchClaudeModels(claudeKey).catch(() => []) : [],
+    ...customProviders.map((p) => fetchCustomProviderModels(p).catch(() => []))
   ]);
   // Extra fields (category/tier/description) beyond the standard OpenAI
   // model object — well-behaved OpenAI-compatible clients ignore unknown
   // fields, and it lets a caller build its own categorized/searchable
   // picker the same way this app's own UI does.
-  const data = [...openaiModels, ...claudeModels].map((m) => ({
+  const data = [...openaiModels, ...claudeModels, ...customResults.flat()].map((m) => ({
     id: m.id,
     object: 'model',
     created: Math.floor(Date.now() / 1000),
@@ -65,25 +72,27 @@ router.get('/models', relayAuth, async (req, res) => {
 });
 
 // POST /v1/chat/completions — OpenAI wire format in, OpenAI wire format out,
-// regardless of whether the request is actually served by OpenAI or Claude.
-// Vision content (OpenAI-style image_url with a data: URL) is accepted and
-// translated automatically for whichever provider ends up serving it.
-// An explicit "provider": "openai" | "claude" in the body overrides the
-// default name-based routing, for custom / fine-tuned model names.
+// regardless of whether the request is actually served by OpenAI, Claude,
+// or an admin-added third-party provider. Vision content (OpenAI-style
+// image_url with a data: URL) is accepted and translated automatically for
+// whichever provider ends up serving it. An explicit "provider" in the
+// body — "openai", "claude", or a configured custom provider's slug —
+// overrides the default name-based routing, for custom / fine-tuned model
+// names or third-party model catalogs this app can't guess the origin of.
 router.post('/chat/completions', relayAuth, async (req, res) => {
+  const db = getDB();
   const { model, messages, stream, provider: providerOverride } = req.body || {};
   if (!model || !Array.isArray(messages)) {
     return res.status(400).json(errJson('Request must include "model" and "messages".'));
   }
-  const provider = (providerOverride === 'openai' || providerOverride === 'claude')
-    ? providerOverride
-    : providerForModel(model);
-  if (!provider) {
-    return res.status(400).json(errJson(`Unrecognized model "${model}". Pass an explicit "provider": "openai" | "claude" to override.`));
+  const providerSlug = providerOverride || providerForModel(model);
+  const providerInfo = providerSlug ? resolveProvider(db, providerSlug) : null;
+  if (!providerInfo) {
+    return res.status(400).json(errJson(`Unrecognized model "${model}". Pass an explicit "provider" (e.g. "openai", "claude", or a configured third-party provider's slug) to override.`));
   }
-  const apiKey = resolveApiKey(req.relayUser, provider);
+  const apiKey = resolveApiKey(req.relayUser, providerInfo.slug);
   if (!apiKey) {
-    return res.status(400).json(errJson(`No ${provider === 'openai' ? 'OpenAI' : 'Claude'} API key is configured for this account.`));
+    return res.status(400).json(errJson(`No API key is configured for provider "${providerInfo.label}".`));
   }
 
   const created = Math.floor(Date.now() / 1000);
@@ -101,7 +110,7 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
         id, object: 'chat.completion.chunk', created, model,
         choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }]
       })}\n\n`);
-      for await (const delta of streamChat(provider, apiKey, model, messages)) {
+      for await (const delta of streamChat(providerInfo, apiKey, model, messages)) {
         const chunk = {
           id,
           object: 'chat.completion.chunk',
@@ -131,7 +140,7 @@ router.post('/chat/completions', relayAuth, async (req, res) => {
 
   try {
     let full = '';
-    for await (const delta of streamChat(provider, apiKey, model, messages)) {
+    for await (const delta of streamChat(providerInfo, apiKey, model, messages)) {
       full += delta;
     }
     res.json({

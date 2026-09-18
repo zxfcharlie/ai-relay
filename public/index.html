@@ -282,6 +282,47 @@
         <button class="btn btn-primary" id="save-admin-btn">保存设置</button>
       </div>
 
+      <div class="section-title">第三方模型服务商</div>
+      <div class="field-hint" style="margin-bottom:10px;">
+        接入任何兼容 OpenAI（<code>/v1/chat/completions</code>）或 Anthropic（<code>/v1/messages</code>）接口格式的第三方聚合服务
+        （比如 ToAPIs 一类的中转平台），加进来之后它的对话模型会一起出现在模型选择器里，和官方 OpenAI / Claude 模型并列，
+        聊天时选哪个就是用哪个——这就是"官方还是第三方"的开关，选模型的时候就选好了。目前只支持这些服务的<strong>对话/视觉模型</strong>，
+        图像、视频生成暂不支持（不同第三方的参数和调用方式差异太大，暂不贸然接入）。
+      </div>
+      <div id="admin-providers-list"></div>
+      <div class="save-row" style="justify-content:flex-start;">
+        <button class="btn btn-ghost" id="add-provider-btn">＋ 添加服务商</button>
+      </div>
+      <div id="add-provider-form" class="hidden" style="margin-top:12px; padding:14px; background:var(--bg-sunken); border:1px solid var(--border); border-radius:10px;">
+        <div class="field">
+          <label>名称</label>
+          <input id="np-label" placeholder="例如 ToAPIs">
+        </div>
+        <div class="field">
+          <label>标识（英文小写，模型列表里用来区分来源，不能是 openai / claude）</label>
+          <input id="np-slug" placeholder="例如 toapis">
+        </div>
+        <div class="field">
+          <label>接口格式</label>
+          <select id="np-type">
+            <option value="openai-compatible">OpenAI 兼容（/v1/chat/completions）</option>
+            <option value="anthropic-compatible">Anthropic 兼容（/v1/messages）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input id="np-base-url" placeholder="例如 https://toapis.com">
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input id="np-api-key" placeholder="该服务商的密钥">
+        </div>
+        <div class="save-row">
+          <button class="btn btn-ghost" id="cancel-provider-btn">取消</button>
+          <button class="btn btn-primary" id="create-provider-btn">添加</button>
+        </div>
+      </div>
+
       <div class="section-title">模型价格（每百万 token 美元，用于用量统计里估算费用）</div>
       <div class="field-hint" style="margin-bottom:10px;">价格不会自动获取——官方价格调整比较频繁，这里都是手动填写，未填的模型不计入费用统计（仍会统计 token 数）。</div>
       <div id="admin-pricing-list"></div>

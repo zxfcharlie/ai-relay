@@ -2,7 +2,10 @@ const express = require('express');
 const { nanoid } = require('nanoid');
 const { getDB, save } = require('../db');
 const { requireAuth } = require('../auth');
-const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage, sanitizeImageOptions, providerForModel } = require('../services/providers');
+const {
+  streamChat, fetchOpenAIModels, fetchClaudeModels, fetchCustomProviderModels,
+  generateOrEditImage, sanitizeImageOptions, providerForModel, resolveProvider
+} = require('../services/providers');
 const { resolveApiKey } = require('../services/keys');
 const { saveImage, readImageBase64, deleteImageFile } = require('../services/images');
 const { purgeImagesForMessage } = require('../services/cleanup');
@@ -19,16 +22,20 @@ function parseImageDataUrl(url) {
   return { mediaType: m[1], data: m[2] };
 }
 
-// Every model available for this account, across whichever provider(s) it
-// has a key for — fetched live from OpenAI / Anthropic rather than a fixed
-// list, so new models show up automatically.
+// Every model available for this account, across the built-in OpenAI/Claude
+// providers (whichever it has a key for) plus any admin-added third-party
+// provider — all fetched live rather than a fixed list, so new models show
+// up automatically.
 router.get('/models', requireAuth, async (req, res) => {
+  const db = getDB();
   const openaiKey = resolveApiKey(req.user, 'openai');
   const claudeKey = resolveApiKey(req.user, 'claude');
+  const customProviders = (db.settings.customProviders || []).filter((p) => p.enabled && p.apiKey);
 
-  const [openaiModels, claudeModels] = await Promise.all([
+  const [openaiModels, claudeModels, ...customResults] = await Promise.all([
     openaiKey ? fetchOpenAIModels(openaiKey).catch((e) => ({ error: e.message })) : [],
-    claudeKey ? fetchClaudeModels(claudeKey).catch((e) => ({ error: e.message })) : []
+    claudeKey ? fetchClaudeModels(claudeKey).catch((e) => ({ error: e.message })) : [],
+    ...customProviders.map((p) => fetchCustomProviderModels(p).catch((e) => ({ error: e.message, slug: p.slug })))
   ]);
 
   const errors = {};
@@ -37,6 +44,10 @@ router.get('/models', requireAuth, async (req, res) => {
   else if (openaiModels && openaiModels.error) errors.openai = openaiModels.error;
   if (Array.isArray(claudeModels)) models.push(...claudeModels);
   else if (claudeModels && claudeModels.error) errors.claude = claudeModels.error;
+  customResults.forEach((result, i) => {
+    if (Array.isArray(result)) models.push(...result);
+    else if (result && result.error) errors[customProviders[i].slug] = result.error;
+  });
 
   res.json({ models, hasOpenAIKey: !!openaiKey, hasClaudeKey: !!claudeKey, errors });
 });
@@ -144,10 +155,14 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
   if (!convo) return res.status(404).json({ error: 'Conversation not found.' });
 
   const provider = convo.provider || providerForModel(convo.model);
+  const providerInfo = resolveProvider(db, provider);
+  if (!providerInfo) {
+    return res.status(400).json({ error: `Unknown or disabled provider "${provider}".` });
+  }
   const apiKey = resolveApiKey(req.user, provider);
   if (!apiKey) {
     return res.status(400).json({
-      error: `No API key configured for ${provider === 'openai' ? 'OpenAI' : 'Claude'}. Add one in Settings.`
+      error: `No API key configured for ${providerInfo.label}. Add one in Settings.`
     });
   }
 
@@ -223,7 +238,7 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
   let full = '';
   const usage = {};
   try {
-    for await (const delta of streamChat(provider, apiKey, convo.model, history, usage)) {
+    for await (const delta of streamChat(providerInfo, apiKey, convo.model, history, usage)) {
       full += delta;
       res.write(`data: ${JSON.stringify({ delta })}\n\n`);
     }

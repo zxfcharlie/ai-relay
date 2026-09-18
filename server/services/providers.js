@@ -90,6 +90,37 @@ function providerForModel(model) {
   return null;
 }
 
+// ---------------- provider registry (official OpenAI/Claude + admin-added third parties) ----------------
+// A "provider" is anything that can serve /v1/chat/completions (openai-
+// compatible) or /v1/messages (anthropic-compatible) — official OpenAI and
+// Claude are just two fixed entries; admins can add more (e.g. a ToAPIs-
+// style aggregator) with their own base URL + key. Everything downstream
+// (streaming, model discovery, usage recording) is keyed by provider
+// *slug* and dispatches on provider *type*, so a custom provider gets the
+// exact same code path as whichever official protocol it mimics.
+
+function listProviders(db) {
+  return [
+    { slug: 'openai', label: 'OpenAI', type: 'openai-compatible', builtin: true },
+    { slug: 'claude', label: 'Claude', type: 'anthropic-compatible', builtin: true },
+    ...((db.settings.customProviders || [])
+      .filter((p) => p.enabled)
+      .map((p) => ({ slug: p.slug, label: p.label, type: p.type, builtin: false })))
+  ];
+}
+
+// Resolves a provider slug to { slug, label, type, baseURL, builtin }, or
+// null if it doesn't exist / isn't enabled. Does NOT resolve the API key —
+// see services/keys.js resolveApiKey, which handles the personal-key /
+// global-key / custom-provider-key priority separately.
+function resolveProvider(db, slug) {
+  if (slug === 'openai') return { slug: 'openai', label: 'OpenAI', type: 'openai-compatible', baseURL: OPENAI_BASE_URL, builtin: true };
+  if (slug === 'claude') return { slug: 'claude', label: 'Claude', type: 'anthropic-compatible', baseURL: ANTHROPIC_BASE_URL, builtin: true };
+  const custom = (db.settings.customProviders || []).find((p) => p.slug === slug && p.enabled);
+  if (!custom) return null;
+  return { slug: custom.slug, label: custom.label, type: custom.type, baseURL: custom.baseURL, builtin: false };
+}
+
 // ---------------- dynamic model discovery (so "every model" stays current) ----------------
 
 const modelCache = new Map(); // key: provider+':'+apiKey -> { time, models }
@@ -188,7 +219,7 @@ async function fetchOpenAIModels(apiKey) {
       const category = classifyOpenAIModel(m.id);
       if (!category) return null;
       const meta = describeOpenAIModel(m.id, category);
-      return { id: m.id, label: m.id, provider: 'openai', category, ...meta };
+      return { id: m.id, label: m.id, provider: 'openai', providerLabel: 'OpenAI', category, ...meta };
     })
     .filter(Boolean)
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -208,10 +239,40 @@ async function fetchClaudeModels(apiKey) {
     id: m.id,
     label: m.display_name || m.id,
     provider: 'claude',
+    providerLabel: 'Claude',
     category: 'chat',
     ...describeClaudeModel(m.id)
   }));
   setCachedModels('claude', apiKey, models);
+  return models;
+}
+
+// A custom provider's model list, unfiltered — unlike fetchOpenAIModels /
+// fetchClaudeModels, this can't apply OpenAI/Claude-specific naming
+// heuristics (a third party's models are named however it names them, e.g.
+// "gpt-5.6-terra", "seedream-4.0"), so everything /v1/models returns is
+// treated as a chat model. Some entries may in fact be image/video models
+// that error if selected for chat — that's a known, disclosed limitation
+// rather than a guess this app pretends to make confidently.
+async function fetchCustomProviderModels(provider) {
+  const cached = getCachedModels(`custom:${provider.slug}`, provider.apiKey);
+  if (cached) return cached;
+  const headers = provider.type === 'anthropic-compatible'
+    ? { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01' }
+    : { Authorization: `Bearer ${provider.apiKey}` };
+  const res = await fetch(`${provider.baseURL}/v1/models`, { headers });
+  if (!res.ok) throw new Error(`${provider.label} model list failed (${res.status})`);
+  const data = await res.json();
+  const models = (data.data || []).map((m) => ({
+    id: m.id,
+    label: m.display_name || m.id,
+    provider: provider.slug,
+    providerLabel: provider.label,
+    category: 'chat',
+    tier: 'custom',
+    description: `第三方服务商「${provider.label}」提供的模型，未验证具体能力。`
+  }));
+  setCachedModels(`custom:${provider.slug}`, provider.apiKey, models);
   return models;
 }
 
@@ -246,9 +307,13 @@ async function* sseLines(response) {
 // { inputTokens, outputTokens, cachedInputTokens } as the provider reports
 // them — read it after the generator finishes (async generators don't
 // expose their own return value through `for await`, so an out-param is
-// the simplest way to hand this back to the caller).
-async function* streamOpenAI(apiKey, model, messages, usage) {
-  const res = await fetch(`${OPENAI_BASE_URL}/v1/chat/completions`, {
+// the simplest way to hand this back to the caller). `baseURL` lets this
+// same function serve both the official OpenAI API and any admin-added
+// custom provider that speaks the same chat-completions wire format.
+async function* streamOpenAI(apiKey, model, messages, usage, baseURL, providerLabel) {
+  const base = baseURL || OPENAI_BASE_URL;
+  const label = providerLabel || 'OpenAI';
+  const res = await fetch(`${base}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -263,7 +328,7 @@ async function* streamOpenAI(apiKey, model, messages, usage) {
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    throw new Error(`OpenAI error ${res.status}: ${text.slice(0, 500)}`);
+    throw new Error(`${label} error ${res.status}: ${text.slice(0, 500)}`);
   }
   for await (const { data } of sseLines(res)) {
     if (data === '[DONE]') return;
@@ -285,9 +350,11 @@ async function* streamOpenAI(apiKey, model, messages, usage) {
   }
 }
 
-async function* streamClaude(apiKey, model, messages, maxTokens = 8192, usage) {
+async function* streamClaude(apiKey, model, messages, maxTokens = 8192, usage, baseURL, providerLabel) {
+  const base = baseURL || ANTHROPIC_BASE_URL;
+  const label = providerLabel || 'Claude';
   const { system, messages: converted } = toClaudeMessages(messages);
-  const res = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
+  const res = await fetch(`${base}/v1/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -309,10 +376,10 @@ async function* streamClaude(apiKey, model, messages, maxTokens = 8192, usage) {
     // retry once with a conservative value instead of failing the whole
     // message over a fixed constant that doesn't fit every model.
     if (res.status === 400 && maxTokens > 4096 && /max_tokens/i.test(text)) {
-      yield* streamClaude(apiKey, model, messages, 4096, usage);
+      yield* streamClaude(apiKey, model, messages, 4096, usage, baseURL, providerLabel);
       return;
     }
-    throw new Error(`Claude error ${res.status}: ${text.slice(0, 500)}`);
+    throw new Error(`${label} error ${res.status}: ${text.slice(0, 500)}`);
   }
   for await (const { event, data } of sseLines(res)) {
     if (event === 'content_block_delta') {
@@ -357,14 +424,22 @@ async function* streamClaude(apiKey, model, messages, maxTokens = 8192, usage) {
   }
 }
 
-// Unified entry point: provider is 'openai' | 'claude'. `messages` items are
-// { role, content } where content may be a string, a normalized parts
-// array, or an OpenAI-style vision content array — see normalizeContent.
-// `usage`, if passed, is populated in place — see streamOpenAI/streamClaude.
-function streamChat(provider, apiKey, model, messages, usage) {
-  if (provider === 'openai') return streamOpenAI(apiKey, model, messages, usage);
-  if (provider === 'claude') return streamClaude(apiKey, model, messages, 8192, usage);
-  throw new Error('Unknown provider');
+// Unified entry point, dispatching by provider *type* rather than a fixed
+// 'openai'/'claude' slug — this is what lets a custom (admin-added) third-
+// party provider reuse the exact same streaming/parsing code as whichever
+// protocol it mimics. `providerInfo` is a resolveProvider() result:
+// { type, baseURL, label }. `messages` items are { role, content } where
+// content may be a string, a normalized parts array, or an OpenAI-style
+// vision content array — see normalizeContent. `usage`, if passed, is
+// populated in place — see streamOpenAI/streamClaude.
+function streamChat(providerInfo, apiKey, model, messages, usage) {
+  if (providerInfo.type === 'openai-compatible') {
+    return streamOpenAI(apiKey, model, messages, usage, providerInfo.baseURL, providerInfo.label);
+  }
+  if (providerInfo.type === 'anthropic-compatible') {
+    return streamClaude(apiKey, model, messages, 8192, usage, providerInfo.baseURL, providerInfo.label);
+  }
+  throw new Error('Unknown provider type');
 }
 
 // ---------------- image generation / editing (gpt-image-*) ----------------
@@ -468,8 +543,11 @@ function generateOrEditImage(apiKey, model, prompt, images, options) {
 module.exports = {
   streamChat,
   providerForModel,
+  listProviders,
+  resolveProvider,
   fetchOpenAIModels,
   fetchClaudeModels,
+  fetchCustomProviderModels,
   generateOrEditImage,
   sanitizeImageOptions,
   IMAGE_QUALITIES,

@@ -226,7 +226,6 @@
     renderModelPickerList($('#model-picker-search').value);
   }
 
-  const PROVIDER_LABELS = { openai: 'OpenAI', claude: 'Claude' };
   const CATEGORY_LABELS = { chat: '对话', image: '图像生成' };
   const TIER_LABELS = { flagship: '旗舰', reasoning: '推理', fast: '轻量', balanced: '均衡', image: '图像' };
 
@@ -270,10 +269,10 @@
     });
 
     for (const [key, items] of groups) {
-      const [provider, category] = key.split(':');
+      const [, category] = key.split(':');
       const label = document.createElement('div');
       label.className = 'model-group-label';
-      label.textContent = `${PROVIDER_LABELS[provider] || provider} · ${CATEGORY_LABELS[category] || category}`;
+      label.textContent = `${items[0].providerLabel || items[0].provider} · ${CATEGORY_LABELS[category] || category}`;
       list.appendChild(label);
 
       items.forEach((m) => {
@@ -842,6 +841,7 @@
       $('#admin-monthly-budget').value = data.settings.monthlyBudgetUSD || '';
 
       renderPricingList(data.settings.pricing || {});
+      renderProvidersList(data.settings.customProviders || []);
 
       const body = $('#admin-users-body');
       body.innerHTML = '';
@@ -964,6 +964,99 @@
     try {
       await api('PUT', '/api/settings/admin/pricing', { pricing });
       toast('已保存价格');
+    } catch (err) { toast(err.message); }
+  });
+
+  // ---- custom (third-party) providers ----
+
+  const PROVIDER_TYPE_LABELS = { 'openai-compatible': 'OpenAI 兼容', 'anthropic-compatible': 'Anthropic 兼容' };
+
+  function renderProvidersList(providers) {
+    const list = $('#admin-providers-list');
+    list.innerHTML = '';
+    if (!providers.length) {
+      list.innerHTML = '<div class="field-hint">还没有接入第三方服务商。</div>';
+      return;
+    }
+    providers.forEach((p) => {
+      const row = document.createElement('div');
+      row.className = 'provider-row';
+      row.innerHTML = `
+        <div class="provider-row-main">
+          <div class="provider-row-name">
+            <span class="prov-name-text"></span>
+            <span class="pill prov-status-pill"></span>
+            <span class="pill prov-nokey-pill hidden" style="color:#e7998a;border-color:#e7998a;">未设置密钥</span>
+          </div>
+          <div class="provider-row-meta"></div>
+        </div>
+        <div class="provider-row-actions"></div>`;
+      row.querySelector('.prov-name-text').textContent = `${p.label}（${p.slug}）`;
+      const statusPill = row.querySelector('.prov-status-pill');
+      statusPill.textContent = p.enabled ? '已启用' : '已禁用';
+      statusPill.classList.toggle('status-active', p.enabled);
+      row.querySelector('.prov-nokey-pill').classList.toggle('hidden', p.hasApiKey);
+      row.querySelector('.provider-row-meta').textContent = `${PROVIDER_TYPE_LABELS[p.type] || p.type} · ${p.baseURL}`;
+
+      const actions = row.querySelector('.provider-row-actions');
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'btn btn-ghost';
+      toggleBtn.style.padding = '4px 8px';
+      toggleBtn.style.fontSize = '12px';
+      toggleBtn.textContent = p.enabled ? '禁用' : '启用';
+      toggleBtn.addEventListener('click', async () => {
+        try {
+          await api('PUT', `/api/settings/admin/providers/${p.id}`, { enabled: !p.enabled });
+          loadAdminIntoModal();
+          loadModels();
+        } catch (err) { toast(err.message); }
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-ghost btn-danger';
+      delBtn.style.padding = '4px 8px';
+      delBtn.style.fontSize = '12px';
+      delBtn.textContent = '删除';
+      delBtn.addEventListener('click', async () => {
+        if (!confirm(`删除服务商「${p.label}」？使用它的对话之后会因为找不到密钥而报错。`)) return;
+        try {
+          await api('DELETE', `/api/settings/admin/providers/${p.id}`);
+          loadAdminIntoModal();
+          loadModels();
+        } catch (err) { toast(err.message); }
+      });
+
+      actions.appendChild(toggleBtn);
+      actions.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  }
+
+  $('#add-provider-btn').addEventListener('click', () => {
+    $('#add-provider-form').classList.remove('hidden');
+  });
+  $('#cancel-provider-btn').addEventListener('click', () => {
+    $('#add-provider-form').classList.add('hidden');
+  });
+  $('#create-provider-btn').addEventListener('click', async () => {
+    const payload = {
+      label: $('#np-label').value.trim(),
+      slug: $('#np-slug').value.trim().toLowerCase(),
+      type: $('#np-type').value,
+      baseURL: $('#np-base-url').value.trim(),
+      apiKey: $('#np-api-key').value.trim()
+    };
+    if (!payload.label || !payload.slug || !payload.baseURL || !payload.apiKey) {
+      toast('名称、标识、Base URL、API Key 都需要填写');
+      return;
+    }
+    try {
+      await api('POST', '/api/settings/admin/providers', payload);
+      toast('已添加服务商');
+      $('#add-provider-form').classList.add('hidden');
+      ['#np-label', '#np-slug', '#np-base-url', '#np-api-key'].forEach((sel) => { $(sel).value = ''; });
+      loadAdminIntoModal();
+      loadModels();
     } catch (err) { toast(err.message); }
   });
 
@@ -1112,12 +1205,20 @@
     data.byModel.forEach((m) => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${m.model}</td>
+        <td></td>
         <td>${formatTokens(m.inputTokens)}</td>
         <td>${formatTokens(m.outputTokens)}</td>
         <td>${formatTokens(m.totalTokens)}</td>
         <td>${formatCost(m.cost)}</td>
         <td>${m.requests}</td>`;
+      const nameCell = tr.children[0];
+      const nameLine = document.createElement('div');
+      nameLine.textContent = m.model;
+      const providerLine = document.createElement('div');
+      providerLine.style.cssText = 'font-size:11px; color:var(--text-faint);';
+      providerLine.textContent = m.provider;
+      nameCell.appendChild(nameLine);
+      nameCell.appendChild(providerLine);
       modelBody.appendChild(tr);
     });
     $('#usage-pricing-gap-hint').classList.toggle('hidden', !data.hasPricingGaps);

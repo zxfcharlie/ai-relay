@@ -1,7 +1,9 @@
 const { getDB } = require('../db');
 
 // Personal key wins if the user set one; otherwise fall back to the
-// admin-configured global key for that provider.
+// admin-configured global key for that provider. Custom (admin-added
+// third-party) providers only ever have one shared key — there's no
+// per-user personal override for those, unlike the two built-ins.
 function resolveApiKey(user, provider) {
   const db = getDB();
   if (provider === 'openai') {
@@ -10,7 +12,8 @@ function resolveApiKey(user, provider) {
   if (provider === 'claude') {
     return user.personalClaudeKey || db.settings.globalClaudeKey || null;
   }
-  return null;
+  const custom = (db.settings.customProviders || []).find((p) => p.slug === provider && p.enabled);
+  return custom ? (custom.apiKey || null) : null;
 }
 
 module.exports = { resolveApiKey };
