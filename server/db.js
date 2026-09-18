@@ -40,13 +40,32 @@ function load() {
     fs.writeFileSync(DB_FILE, JSON.stringify(DEFAULT_DB, null, 2));
   }
   const raw = fs.readFileSync(DB_FILE, 'utf-8');
+  let db;
   try {
     const parsed = JSON.parse(raw);
     // backfill any missing top-level keys from default (safe upgrades)
-    return { ...DEFAULT_DB, ...parsed, settings: { ...DEFAULT_DB.settings, ...(parsed.settings || {}) } };
+    db = { ...DEFAULT_DB, ...parsed, settings: { ...DEFAULT_DB.settings, ...(parsed.settings || {}) } };
   } catch (e) {
-    return JSON.parse(JSON.stringify(DEFAULT_DB));
+    db = JSON.parse(JSON.stringify(DEFAULT_DB));
   }
+
+  // Per-record migration: accounts created before the approval-status
+  // field existed have no `status` at all. Treat "missing" as "already
+  // active" (they were already using the app) rather than locking out
+  // every existing account — including the admin — the moment this field
+  // was introduced. Written back immediately so it only runs once.
+  let migrated = false;
+  for (const u of db.users) {
+    if (!u.status) {
+      u.status = 'active';
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+  }
+
+  return db;
 }
 
 let db = load();

@@ -2,7 +2,7 @@ const express = require('express');
 const { nanoid } = require('nanoid');
 const { getDB, save } = require('../db');
 const { requireAuth } = require('../auth');
-const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage, sanitizeImageOptions } = require('../services/providers');
+const { streamChat, fetchOpenAIModels, fetchClaudeModels, generateOrEditImage, sanitizeImageOptions, providerForModel } = require('../services/providers');
 const { resolveApiKey } = require('../services/keys');
 const { saveImage, readImageBase64, deleteImageFile } = require('../services/images');
 const { purgeImagesForMessage } = require('../services/cleanup');
@@ -143,7 +143,7 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
   const convo = db.conversations.find((c) => c.id === req.params.id && c.userId === req.user.id);
   if (!convo) return res.status(404).json({ error: 'Conversation not found.' });
 
-  const provider = convo.provider;
+  const provider = convo.provider || providerForModel(convo.model);
   const apiKey = resolveApiKey(req.user, provider);
   if (!apiKey) {
     return res.status(400).json({
