@@ -15,7 +15,7 @@ const router = express.Router();
 
 const DATA_URL_RE = /^data:([^;]+);base64,(.*)$/s;
 
-function parseImageDataUrl(url) {
+function parseDataUrl(url) {
   if (typeof url !== 'string') return null;
   const m = DATA_URL_RE.exec(url);
   if (!m) return null;
@@ -92,9 +92,10 @@ router.get('/conversations/:id', requireAuth, (req, res) => {
       id: m.id,
       role: m.role,
       content: m.content,
-      // Images are served from disk by reference, never inlined as base64
-      // here — keeps this payload (and db.json) small.
+      // Attachments are served from disk by reference, never inlined as
+      // base64 here — keeps this payload (and db.json) small.
       images: (m.images || []).map((img) => ({ filename: img.filename, mediaType: img.mediaType, url: `/api/images/${img.filename}` })),
+      files: (m.files || []).map((f) => ({ filename: f.filename, mediaType: f.mediaType, originalName: f.originalName, url: `/api/images/${f.filename}` })),
       createdAt: m.createdAt
     }));
   res.json({ conversation: convo, messages });
@@ -105,7 +106,10 @@ router.delete('/conversations/:id', requireAuth, (req, res) => {
   const convo = db.conversations.find((c) => c.id === req.params.id && c.userId === req.user.id);
   if (!convo) return res.status(404).json({ error: 'Conversation not found.' });
   const messagesToRemove = db.messages.filter((m) => m.conversationId === convo.id);
-  for (const m of messagesToRemove) for (const img of m.images || []) deleteImageFile(img.filename);
+  for (const m of messagesToRemove) {
+    for (const img of m.images || []) deleteImageFile(img.filename);
+    for (const f of m.files || []) deleteImageFile(f.filename);
+  }
   db.conversations = db.conversations.filter((c) => c.id !== convo.id);
   db.messages = db.messages.filter((m) => m.conversationId !== convo.id);
   save();
@@ -128,27 +132,41 @@ router.put('/conversations/:id', requireAuth, (req, res) => {
   res.json({ conversation: convo });
 });
 
-// A stored message's content, folded back into the { text, images[] } shape
-// the provider layer expects. Image bytes live on disk, not in db.json.
+// A stored message's content, folded back into the { text, images[], files[] }
+// shape the provider layer expects. Bytes live on disk, not in db.json.
 function buildContent(m) {
-  if (!m.images || !m.images.length) return m.content;
+  const hasImages = m.images && m.images.length;
+  const hasFiles = m.files && m.files.length;
+  if (!hasImages && !hasFiles) return m.content;
   const parts = [];
   if (m.content) parts.push({ type: 'text', text: m.content });
-  for (const img of m.images) {
+  for (const img of m.images || []) {
     const data = readImageBase64(img.filename);
     if (data) parts.push({ type: 'image', mediaType: img.mediaType, data });
+  }
+  for (const f of m.files || []) {
+    const data = readImageBase64(f.filename);
+    if (data) parts.push({ type: 'file', filename: f.originalName || f.filename, mediaType: f.mediaType, data });
   }
   return parts;
 }
 
 // Streams the assistant's reply back as SSE while it saves both the user
-// message (text + any attached images) and the growing assistant message.
+// message (text + any attached images/PDFs) and the growing assistant message.
 router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
-  const { content, images } = req.body || {};
+  const { content, images, files } = req.body || {};
   const text = (content || '').trim();
   const rawImages = Array.isArray(images) ? images.slice(0, 6) : [];
-  const parsedImages = rawImages.map(parseImageDataUrl).filter(Boolean);
-  if (!text && !parsedImages.length) return res.status(400).json({ error: 'Message is empty.' });
+  const parsedImages = rawImages.map(parseDataUrl).filter(Boolean);
+  const rawFiles = Array.isArray(files) ? files.slice(0, 6) : [];
+  const parsedFiles = rawFiles
+    .map((f) => {
+      const parsed = f && parseDataUrl(f.dataUrl);
+      if (!parsed || parsed.mediaType !== 'application/pdf') return null; // only PDFs are supported as binary file attachments; anything else should arrive as plain text in `content`
+      return { ...parsed, originalName: (f.name || 'document.pdf').slice(0, 200) };
+    })
+    .filter(Boolean);
+  if (!text && !parsedImages.length && !parsedFiles.length) return res.status(400).json({ error: 'Message is empty.' });
 
   const db = getDB();
   const convo = db.conversations.find((c) => c.id === req.params.id && c.userId === req.user.id);
@@ -170,6 +188,7 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
   // preview/download link; runCleanup() (or the immediate purge below when
   // retention is 0) is what keeps this from accumulating forever.
   const savedImages = parsedImages.map((img) => saveImage(img.mediaType, img.data));
+  const savedFiles = parsedFiles.map((f) => ({ ...saveImage(f.mediaType, f.data), originalName: f.originalName }));
 
   const userMsg = {
     id: nanoid(),
@@ -177,11 +196,12 @@ router.post('/conversations/:id/messages', requireAuth, async (req, res) => {
     role: 'user',
     content: text,
     images: savedImages,
+    files: savedFiles,
     createdAt: new Date().toISOString()
   };
   db.messages.push(userMsg);
   if (convo.title === 'New chat') {
-    convo.title = (text || (savedImages.length ? '[图片]' : '新对话')).slice(0, 60);
+    convo.title = (text || (savedImages.length ? '[图片]' : (savedFiles.length ? `[文件] ${savedFiles[0].originalName}` : '新对话'))).slice(0, 60);
   }
   convo.updatedAt = new Date().toISOString();
   save();

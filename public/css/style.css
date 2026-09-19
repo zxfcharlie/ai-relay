@@ -678,6 +678,49 @@ a { color: inherit; }
   line-height: 1;
 }
 
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-size: 12px;
+}
+.file-chip .file-chip-icon { flex-shrink: 0; }
+.file-chip .file-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.file-chip .remove-thumb {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  border: none;
+  font-size: 10px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.msg-files {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.msg-files a.file-chip {
+  max-width: 260px;
+  text-decoration: none;
+}
+.msg-files a.file-chip:hover { border-color: var(--accent); }
+
 .msg-images {
   display: flex;
   gap: 8px;

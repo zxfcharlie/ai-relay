@@ -169,6 +169,7 @@ router.delete('/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
     const convo = db.conversations.find((c) => c.id === m.conversationId);
     if (!convo) {
       for (const img of m.images || []) deleteImageFile(img.filename);
+      for (const f of m.files || []) deleteImageFile(f.filename);
       return false;
     }
     return true;

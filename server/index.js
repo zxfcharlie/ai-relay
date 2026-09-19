@@ -16,7 +16,7 @@ const { startCleanupSchedule } = require('./services/cleanup');
 const PORT = process.env.PORT || 8511;
 
 const app = express();
-app.use(express.json({ limit: '30mb' })); // generous enough for a few attached images (base64)
+app.use(express.json({ limit: '45mb' })); // generous enough for a few attached images/PDFs (base64)
 app.use(cookieParser());
 
 // App API (cookie-authenticated, used by the bundled web UI)

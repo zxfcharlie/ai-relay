@@ -205,7 +205,7 @@
       <thead><tr><th>字段</th><th>说明</th></tr></thead>
       <tbody>
         <tr><td>model</td><td>必填，模型 ID</td></tr>
-        <tr><td>messages</td><td>必填，标准 OpenAI 消息数组；<code>content</code> 支持字符串，或 <code>[{type:"text",...}, {type:"image_url",image_url:{url:"data:..."}}]</code> 这种视觉格式（会按目标模型自动转换成对应厂商需要的格式）</td></tr>
+        <tr><td>messages</td><td>必填，标准 OpenAI 消息数组；<code>content</code> 支持字符串，或数组形式的多模态内容：<code>{type:"text",...}</code>、<code>{type:"image_url",image_url:{url:"data:..."}}</code>（图片）、<code>{type:"file",file:{file_data:"data:application/pdf;base64,...",filename:"..."}}</code>（PDF，标准 OpenAI Chat Completions 格式），都会按目标模型自动转换成对应厂商需要的格式（比如 PDF 会转成 Claude 的 <code>document</code> 内容块）</td></tr>
         <tr><td>stream</td><td class="opt">选填，布尔，默认 false</td></tr>
         <tr><td>provider</td><td class="opt">选填，<code>"openai"</code> / <code>"claude"</code> / 管理员在后台加的第三方服务商标识，显式覆盖按模型名自动判断的路由（第三方模型名一般猜不出来源，建议总是显式传）</td></tr>
       </tbody>

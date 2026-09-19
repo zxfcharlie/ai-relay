@@ -13,12 +13,26 @@
 // e.g. from the external relay endpoint — and this still works, since we
 // normalize on the way in.
 
+// Internal normalized content is either:
+//   a plain string, or
+//   an array of parts:
+//     { type: 'text', text }
+//     { type: 'image', mediaType, data (base64, no prefix) }
+//     { type: 'file', filename, mediaType, data (base64, no prefix) } — PDFs only;
+//       OpenAI Chat Completions and Claude Messages both support inline PDFs
+//       but nothing else this way (per each provider's own docs), so this
+//       app only ever constructs 'file' parts for application/pdf.
+// Callers may also pass OpenAI-style content arrays — [{type:'text',...},
+// {type:'image_url', image_url:{url:'data:...'}}, {type:'file', file:{file_data,filename}}]
+// — e.g. from the external relay endpoint — and this still works, since we
+// normalize on the way in.
+
 function normalizeContent(content) {
   if (typeof content === 'string' || content == null) return content || '';
   if (!Array.isArray(content)) return String(content);
   return content.map((part) => {
     if (!part || typeof part !== 'object') return { type: 'text', text: String(part || '') };
-    if (part.type === 'image') return part; // already normalized
+    if (part.type === 'image' || part.type === 'file') return part; // already normalized
     if (part.type === 'text') return { type: 'text', text: part.text || '' };
     if (part.type === 'image_url') {
       const url = (part.image_url && part.image_url.url) || '';
@@ -26,6 +40,13 @@ function normalizeContent(content) {
       if (m) return { type: 'image', mediaType: m[1], data: m[2] };
       // Remote (non-data) URLs aren't fetched server-side for this MVP.
       return { type: 'text', text: '[image omitted: remote URLs are not supported, use a data URL]' };
+    }
+    if (part.type === 'file' || (part.file && part.file.file_data)) {
+      const fileData = (part.file && part.file.file_data) || '';
+      const filename = (part.file && part.file.filename) || 'document.pdf';
+      const m = /^data:([^;]+);base64,(.*)$/s.exec(fileData);
+      if (m) return { type: 'file', filename, mediaType: m[1], data: m[2] };
+      return { type: 'text', text: `[file omitted: ${filename} — only base64 data URLs are supported]` };
     }
     return { type: 'text', text: '' };
   });
@@ -37,11 +58,11 @@ function toOpenAIMessages(messages) {
     if (typeof c === 'string') return { role: m.role, content: c };
     return {
       role: m.role,
-      content: c.map((p) =>
-        p.type === 'image'
-          ? { type: 'image_url', image_url: { url: `data:${p.mediaType};base64,${p.data}` } }
-          : { type: 'text', text: p.text }
-      )
+      content: c.map((p) => {
+        if (p.type === 'image') return { type: 'image_url', image_url: { url: `data:${p.mediaType};base64,${p.data}` } };
+        if (p.type === 'file') return { type: 'file', file: { file_data: `data:${p.mediaType};base64,${p.data}`, filename: p.filename } };
+        return { type: 'text', text: p.text };
+      })
     };
   });
 }
@@ -62,16 +83,17 @@ function toClaudeMessages(messages) {
     } else {
       out.push({
         role,
-        content: c.map((p) =>
-          p.type === 'image'
-            ? { type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.data } }
-            : { type: 'text', text: p.text }
-        )
+        content: c.map((p) => {
+          if (p.type === 'image') return { type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.data } };
+          if (p.type === 'file') return { type: 'document', source: { type: 'base64', media_type: p.mediaType, data: p.data } };
+          return { type: 'text', text: p.text };
+        })
       });
     }
   }
   return { system, messages: out };
 }
+
 
 // ---------------- provider inference (used by the relay's default routing) ----------------
 

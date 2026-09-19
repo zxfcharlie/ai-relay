@@ -13,6 +13,7 @@
     imageOptions: { size: 'auto', quality: 'auto', n: 1, outputFormat: 'png', background: 'auto' },
     noModelsAvailable: false,
     pendingImages: [], // { mediaType, data, dataUrl }
+    pendingFiles: [], // { kind: 'pdf'|'text', name, mediaType?, dataUrl?, textContent? }
     streaming: false
   };
 
@@ -472,15 +473,15 @@
     box.innerHTML = '';
     messages.forEach((m) => {
       const imgUrls = (m.images || []).map((img) => img.url);
-      const { textEl } = appendMessageBubble(m.role, '', imgUrls);
-      textEl.innerHTML = renderMarkdownLite(m.content);
-      highlightCodeIn(textEl);
+      const fileAttachments = (m.files || []).map((f) => ({ name: f.originalName || f.filename, url: f.url }));
+      appendMessageBubble(m.role, m.content, imgUrls, fileAttachments);
     });
     box.scrollTop = box.scrollHeight;
   }
 
-  function appendMessageBubble(role, text, images) {
+  function appendMessageBubble(role, text, images, files) {
     images = images || [];
+    files = files || [];
     const box = $('#messages');
     const row = document.createElement('div');
     row.className = 'msg msg-role-' + role;
@@ -508,9 +509,27 @@
       });
       bubble.appendChild(imgWrap);
     }
+    if (files.length) {
+      const fileWrap = document.createElement('div');
+      fileWrap.className = 'msg-files';
+      files.forEach((f) => {
+        const chip = document.createElement('a');
+        chip.className = 'file-chip';
+        chip.href = f.url;
+        chip.target = '_blank';
+        chip.rel = 'noopener';
+        chip.innerHTML = '<span class="file-chip-icon">📄</span><span class="file-chip-name"></span>';
+        chip.querySelector('.file-chip-name').textContent = f.name;
+        fileWrap.appendChild(chip);
+      });
+      bubble.appendChild(fileWrap);
+    }
     const textEl = document.createElement('div');
     textEl.className = 'msg-text';
-    if (text) textEl.textContent = text;
+    if (text) {
+      textEl.innerHTML = renderMarkdownLite(text);
+      highlightCodeIn(textEl);
+    }
     bubble.appendChild(textEl);
     row.appendChild(bubble);
     box.appendChild(row);
@@ -518,18 +537,29 @@
     return { row, bubble, textEl };
   }
 
-  // ---------------- image attachments ----------------
+  // ---------------- attachments: images / PDFs / text-code files ----------------
+
+  const TEXT_EXTENSIONS = ['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'py', 'js', 'jsx', 'ts', 'tsx',
+    'java', 'c', 'h', 'cpp', 'hpp', 'go', 'rs', 'rb', 'php', 'html', 'htm', 'css', 'scss', 'yaml', 'yml',
+    'sql', 'sh', 'bash', 'xml', 'ini', 'toml', 'conf'];
+
+  function fileExt(name) {
+    const m = /\.([a-z0-9]+)$/i.exec(name || '');
+    return m ? m[1].toLowerCase() : '';
+  }
 
   function clearPendingImages() {
     state.pendingImages = [];
+    state.pendingFiles = [];
     renderImagePreviews();
   }
 
   function renderImagePreviews() {
     const rows = [$('#welcome-image-preview'), $('#msg-image-preview')];
+    const total = state.pendingImages.length + state.pendingFiles.length;
     rows.forEach((row) => {
       row.innerHTML = '';
-      row.classList.toggle('hidden', state.pendingImages.length === 0);
+      row.classList.toggle('hidden', total === 0);
       state.pendingImages.forEach((img, idx) => {
         const thumb = document.createElement('div');
         thumb.className = 'image-thumb';
@@ -546,6 +576,21 @@
         thumb.appendChild(removeBtn);
         row.appendChild(thumb);
       });
+      state.pendingFiles.forEach((f, idx) => {
+        const chip = document.createElement('div');
+        chip.className = 'file-chip';
+        chip.innerHTML = `<span class="file-chip-icon">${f.kind === 'pdf' ? '📄' : '📝'}</span><span class="file-chip-name"></span>`;
+        chip.querySelector('.file-chip-name').textContent = f.name;
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-thumb';
+        removeBtn.textContent = '✕';
+        removeBtn.addEventListener('click', () => {
+          state.pendingFiles.splice(idx, 1);
+          renderImagePreviews();
+        });
+        chip.appendChild(removeBtn);
+        row.appendChild(chip);
+      });
     });
   }
 
@@ -557,26 +602,54 @@
       reader.readAsDataURL(file);
     });
   }
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsText(file);
+    });
+  }
 
-  async function addImageFiles(files) {
-    const MAX_IMAGES = 6;
-    const MAX_SIZE = 8 * 1024 * 1024;
+  // Images go to the model as real vision input; PDFs as a real document
+  // attachment (both OpenAI and Claude support inline PDFs natively).
+  // Anything else that looks like text/code is just read as plain text and
+  // folded into the message body at send time — that works with literally
+  // any model, since it's not a special content type at all.
+  async function addAttachmentFiles(files) {
+    const MAX_ATTACHMENTS = 6;
+    const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
+    const MAX_FILE_SIZE = 20 * 1024 * 1024;
     for (const file of files) {
-      if (state.pendingImages.length >= MAX_IMAGES) {
-        toast(`最多同时添加 ${MAX_IMAGES} 张图片`);
+      const totalNow = state.pendingImages.length + state.pendingFiles.length;
+      if (totalNow >= MAX_ATTACHMENTS) {
+        toast(`最多同时添加 ${MAX_ATTACHMENTS} 个附件`);
         break;
       }
-      if (!file.type.startsWith('image/')) continue;
-      if (file.size > MAX_SIZE) {
-        toast(`${file.name} 超过 8MB，已跳过`);
-        continue;
+      const ext = fileExt(file.name);
+      if (file.type.startsWith('image/')) {
+        if (file.size > MAX_IMAGE_SIZE) { toast(`${file.name} 超过 8MB，已跳过`); continue; }
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+          if (!m) continue;
+          state.pendingImages.push({ mediaType: m[1], data: m[2], dataUrl });
+        } catch (e) { /* skip unreadable file */ }
+      } else if (file.type === 'application/pdf' || ext === 'pdf') {
+        if (file.size > MAX_FILE_SIZE) { toast(`${file.name} 超过 20MB，已跳过`); continue; }
+        try {
+          const dataUrl = await readFileAsDataUrl(file);
+          state.pendingFiles.push({ kind: 'pdf', name: file.name, mediaType: 'application/pdf', dataUrl });
+        } catch (e) { /* skip unreadable file */ }
+      } else if (TEXT_EXTENSIONS.includes(ext) || file.type.startsWith('text/') || file.type === 'application/json') {
+        if (file.size > MAX_FILE_SIZE) { toast(`${file.name} 超过 20MB，已跳过`); continue; }
+        try {
+          const textContent = await readFileAsText(file);
+          state.pendingFiles.push({ kind: 'text', name: file.name, textContent });
+        } catch (e) { /* skip unreadable file */ }
+      } else {
+        toast(`不支持的文件类型：${file.name}`);
       }
-      try {
-        const dataUrl = await readFileAsDataUrl(file);
-        const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
-        if (!m) continue;
-        state.pendingImages.push({ mediaType: m[1], data: m[2], dataUrl });
-      } catch (e) { /* skip unreadable file */ }
     }
     renderImagePreviews();
   }
@@ -584,7 +657,7 @@
   $('#welcome-attach-btn').addEventListener('click', () => $('#image-file-input').click());
   $('#msg-attach-btn').addEventListener('click', () => $('#image-file-input').click());
   $('#image-file-input').addEventListener('change', async (e) => {
-    await addImageFiles(Array.from(e.target.files || []));
+    await addAttachmentFiles(Array.from(e.target.files || []));
     e.target.value = '';
   });
 
@@ -594,7 +667,7 @@
       const files = Array.from(e.clipboardData && e.clipboardData.files || []).filter((f) => f.type.startsWith('image/'));
       if (files.length) {
         e.preventDefault();
-        await addImageFiles(files);
+        await addAttachmentFiles(files);
       }
     });
   });
@@ -624,7 +697,10 @@
   async function sendMessage(text) {
     text = (text || '').trim();
     const images = state.pendingImages.slice();
-    if (!text && !images.length) return;
+    const pendingFiles = state.pendingFiles.slice();
+    const pdfFiles = pendingFiles.filter((f) => f.kind === 'pdf');
+    const textFiles = pendingFiles.filter((f) => f.kind === 'text');
+    if (!text && !images.length && !pendingFiles.length) return;
     if (state.streaming) return;
 
     let convoId;
@@ -635,8 +711,21 @@
       return;
     }
 
+    // Text/code files aren't a special API content type — just fold their
+    // content into the message text itself (shown in the bubble too, so
+    // it's clear exactly what the model saw), which works with any model.
+    let outgoingText = text;
+    for (const f of textFiles) {
+      outgoingText += `\n\n**${f.name}**\n\`\`\`\n${f.textContent}\n\`\`\``;
+    }
+
     clearPendingImages();
-    appendMessageBubble('user', text, images.map((i) => i.dataUrl));
+    appendMessageBubble(
+      'user',
+      outgoingText,
+      images.map((i) => i.dataUrl),
+      pdfFiles.map((f) => ({ name: f.name, url: f.dataUrl }))
+    );
     const { bubble: assistantBubble, textEl: assistantTextEl } = appendMessageBubble('assistant', '');
     assistantTextEl.innerHTML = '<span class="typing-dot"></span><span class="typing-dot" style="animation-delay:.15s"></span><span class="typing-dot" style="animation-delay:.3s"></span>';
 
@@ -662,7 +751,11 @@
       const res = await fetch(`/api/conversations/${convoId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text, images: images.map((i) => i.dataUrl) }),
+        body: JSON.stringify({
+          content: outgoingText,
+          images: images.map((i) => i.dataUrl),
+          files: pdfFiles.map((f) => ({ dataUrl: f.dataUrl, name: f.name }))
+        }),
         credentials: 'same-origin'
       });
       if (!res.ok || !res.body) {

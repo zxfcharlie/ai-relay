@@ -146,8 +146,8 @@
         <div class="composer-wrap">
           <div class="image-preview-row hidden" id="welcome-image-preview"></div>
           <div class="composer-box">
-            <button class="attach-btn" id="welcome-attach-btn" title="添加图片" type="button">📎</button>
-            <textarea id="welcome-input" rows="1" placeholder="给 Relay 发消息，可以贴图或上传图片…"></textarea>
+            <button class="attach-btn" id="welcome-attach-btn" title="添加图片、PDF 或文本/代码文件" type="button">📎</button>
+            <textarea id="welcome-input" rows="1" placeholder="给 Relay 发消息，可以贴图或上传图片/PDF/文本文件…"></textarea>
             <button class="send-btn" id="welcome-send" title="发送">➤</button>
           </div>
         </div>
@@ -158,8 +158,8 @@
     <div class="composer hidden" id="composer">
       <div class="image-preview-row hidden" id="msg-image-preview"></div>
       <div class="composer-box">
-        <button class="attach-btn" id="msg-attach-btn" title="添加图片" type="button">📎</button>
-        <textarea id="msg-input" rows="1" placeholder="给 Relay 发消息，可以贴图或上传图片…"></textarea>
+        <button class="attach-btn" id="msg-attach-btn" title="添加图片、PDF 或文本/代码文件" type="button">📎</button>
+        <textarea id="msg-input" rows="1" placeholder="给 Relay 发消息，可以贴图或上传图片/PDF/文本文件…"></textarea>
         <button class="send-btn" id="msg-send" title="发送">➤</button>
       </div>
       <div class="composer-note">回复由你在设置中配置的模型生成，可能出现错误。</div>
@@ -167,7 +167,7 @@
   </main>
 </div>
 
-<input type="file" id="image-file-input" accept="image/*" multiple class="hidden">
+<input type="file" id="image-file-input" accept="image/*,.pdf,.txt,.md,.markdown,.csv,.tsv,.json,.log,.py,.js,.jsx,.ts,.tsx,.java,.c,.h,.cpp,.hpp,.go,.rs,.rb,.php,.html,.htm,.css,.scss,.yaml,.yml,.sql,.sh,.bash,.xml,.ini,.toml,.conf" multiple class="hidden">
 
 <!-- ===================== SETTINGS MODAL ===================== -->
 <div class="modal-backdrop hidden" id="settings-modal">

@@ -11,7 +11,8 @@ const EXT_BY_MIME = {
   'image/jpeg': 'jpg',
   'image/jpg': 'jpg',
   'image/webp': 'webp',
-  'image/gif': 'gif'
+  'image/gif': 'gif',
+  'application/pdf': 'pdf'
 };
 
 // Writes a base64-decoded image to disk once and returns a small reference
